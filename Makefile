@@ -6,7 +6,7 @@ CC?=cc
 CFLAGS?=-DNDEBUG -O3
 LDFLAGS?=-Xlinker -strip-all
 
-LIBS=
+LIBS=-levent
 OBJS=main.o cmdopt.o
 HEADERS=config.h cmdopt.h
 
