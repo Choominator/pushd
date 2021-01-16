@@ -6,9 +6,9 @@ CC?=cc
 CFLAGS?=-DNDEBUG -O3
 LDFLAGS?=-Xlinker -strip-all
 
-LIBS=-levent
-OBJS=main.o cmdopt.o
-HEADERS=config.h cmdopt.h
+LIBS=
+OBJS=main.o cmdopt.o event.o hashset.o
+HEADERS=config.h cmdopt.h event.h hashset.h
 
 build: $(FILESYSTEMNAME)
 
@@ -19,9 +19,10 @@ $(FILESYSTEMNAME): $(OBJS)
 	$(CC) $(LDFLAGS) $(LIBS) -o $(FILESYSTEMNAME) $^
 
 $(OBJS): %.o: %.c $(HEADERS)
-	$(CC) -D_POSIX_SOURCE $(CFLAGS) -c -o $@ $<
+	$(CC) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -c -o $@ $<
 
 config.h: Makefile
-	echo -e "#ifndef CONFIG\n#define CONFIG\n" > config.h
+	echo "#ifndef CONFIG" > config.h
+	echo "#define CONFIG" >> config.h
 	for macro in FILESYSTEMNAME PRETTYNAME; do echo "#define CONFIG_`echo $$macro | sed 's/\(NAME$$\)/_\1/'` \"`eval echo \\$$$$macro`\"" >> config.h; done
-	echo -e "\n#endif" >> config.h
+	echo "#endif" >> config.h
