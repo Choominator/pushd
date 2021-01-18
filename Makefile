@@ -6,9 +6,9 @@ CC?=cc
 CFLAGS?=-DNDEBUG -O3
 LDFLAGS?=-Xlinker -strip-all
 
-LIBS=
-OBJS=main.o cmdopt.o event.o hashset.o
-HEADERS=config.h cmdopt.h event.h hashset.h
+LIBS=-levent
+OBJS=main.o cmdopt.o
+HEADERS=config.h cmdopt.h
 
 build: $(FILESYSTEMNAME)
 
