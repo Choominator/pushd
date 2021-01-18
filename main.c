@@ -9,6 +9,7 @@
 
 #include "config.h"
 #include "cmdopt.h"
+#include "broker.h"
 
 enum main_flags {
     MAIN_FLAGS_NONE,
@@ -18,9 +19,6 @@ enum main_flags {
 
 static enum main_flags main_flags = MAIN_FLAGS_NONE;
 static struct event_base *main_event_base = NULL;
-static struct event *main_event_sighup = NULL;
-static struct event *main_event_sigint = NULL;
-static struct event *main_event_sigterm = NULL;
 
 static void main_foreground(void);
 static void main_background(void);
@@ -28,23 +26,20 @@ static void main_setup_runloop(void);
 static void main_runloop(void);
 static void main_event_log_stderr(int severity, char const *msg);
 static void main_event_log_syslog(int severity, char const *msg);
-static struct event *main_event_signal(int signum);
-static void main_event_handler(evutil_socket_t fd, short events, void *arg);
-static void main_signal_handler(int signum);
 static void main_cleanup(void);
 
 int main(int argc, char *argv[]) {
     cmdopt_register('h', "Show help and exit", MAIN_FLAGS_HELP, (int *) &main_flags, NULL);
     cmdopt_register('f', "Stay in the foreground and log to standard error", MAIN_FLAGS_FOREGROUND, (int *) &main_flags, NULL);
+    broker_cmdopt();
     cmdopt_parse(argc, argv);
     if (main_flags & MAIN_FLAGS_HELP) cmdopt_help(argv[0], EXIT_SUCCESS);
-    atexit(main_cleanup);
     main_setup_runloop();
     if (main_flags & MAIN_FLAGS_FOREGROUND) main_foreground();
     else main_background();
     syslog(LOG_INFO, CONFIG_PRETTY_NAME " initialized successfully");
     main_runloop();
-    syslog(LOG_INFO, CONFIG_PRETTY_NAME " terminating gracefully");
+    syslog(LOG_INFO, "Terminating gracefully");
     return EXIT_SUCCESS;
 }
 
@@ -77,11 +72,13 @@ static void main_background(void) {
     pid = fork();
     if (pid < 0) exit(EXIT_FAILURE);
     if (pid > 0) exit(EXIT_SUCCESS);
+    event_reinit(main_event_base);
     openlog(CONFIG_FILESYSTEM_NAME, LOG_PID, LOG_DAEMON);
     atexit(closelog);
 }
 
 static void main_setup_runloop(void) {
+    atexit(main_cleanup);
     struct sigaction action = {.sa_handler = SIG_IGN};
     sigemptyset(&action.sa_mask);
     sigaction(SIGPIPE, &action, NULL);
@@ -91,13 +88,11 @@ static void main_setup_runloop(void) {
         perror("Unable to initialize libevent");
         exit(EXIT_FAILURE);
     }
+    broker_init(main_event_base);
 }
 
 static void main_runloop(void) {
     event_set_log_callback(main_event_log_syslog);
-    main_event_sighup = main_event_signal(SIGHUP);
-    main_event_sigint = main_event_signal(SIGINT);
-    main_event_sigterm = main_event_signal(SIGTERM);
     event_base_dispatch(main_event_base);
 }
 
@@ -125,41 +120,7 @@ static void main_event_log_syslog(int severity, char const *msg) {
     syslog(severity, "From libevent: %s", msg);
 }
 
-static struct event *main_event_signal(int signum) {
-    struct event *event = evsignal_new(main_event_base, signum, main_event_handler, NULL);
-    if (!event) {
-        perror("Unable to create an event for a signal handler");
-        exit(EXIT_FAILURE);
-    }
-    if (event_add(event, NULL) < 0) {
-        perror("Unable to register a signal event");
-        exit(EXIT_FAILURE);
-    }
-    return event;
-}
-
-static void main_event_handler(evutil_socket_t fd, short events, void *arg) {
-    (void) arg;
-    if (events == EV_SIGNAL) main_signal_handler(fd);
-}
-
-static void main_signal_handler(int signum) {
-    switch (signum) {
-        case SIGHUP:
-            syslog(LOG_INFO, CONFIG_PRETTY_NAME " restarting");
-            break;
-        default:
-            syslog(LOG_INFO, CONFIG_PRETTY_NAME " shutting down");
-            event_del(main_event_sighup);
-            event_del(main_event_sigint);
-            event_del(main_event_sigterm);
-    }
-}
-
 static void main_cleanup(void) {
-    if (main_event_sighup) event_free(main_event_sighup);
-    if (main_event_sigint) event_free(main_event_sigint);
-    if (main_event_sigterm) event_free(main_event_sigterm);
-    event_base_free(main_event_base);
+    if (main_event_base) event_base_free(main_event_base);
     libevent_global_shutdown();
 }

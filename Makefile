@@ -6,9 +6,11 @@ CC?=cc
 CFLAGS?=-DNDEBUG -O3
 LDFLAGS?=-Xlinker -strip-all
 
+export BROKERADDR?=localhost:7874
+
 LIBS=-levent
-OBJS=main.o cmdopt.o
-HEADERS=config.h cmdopt.h
+OBJS=main.o cmdopt.o broker.o
+HEADERS=config.h cmdopt.h broker.h
 
 build: $(FILESYSTEMNAME)
 
@@ -24,5 +26,5 @@ $(OBJS): %.o: %.c $(HEADERS)
 config.h: Makefile
 	echo "#ifndef CONFIG" > config.h
 	echo "#define CONFIG" >> config.h
-	for macro in FILESYSTEMNAME PRETTYNAME; do echo "#define CONFIG_`echo $$macro | sed 's/\(NAME$$\)/_\1/'` \"`eval echo \\$$$$macro`\"" >> config.h; done
+	for macro in FILESYSTEMNAME PRETTYNAME BROKERADDR; do echo "#define CONFIG_`echo $$macro | sed 's/\(NAME$$\|ADDR$$\)/_\1/'` \"`eval echo \\$$$$macro`\"" >> config.h; done
 	echo "#endif" >> config.h
