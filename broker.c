@@ -15,6 +15,7 @@
 #include "config.h"
 #include "broker.h"
 #include "cmdopt.h"
+#include "request.h"
 
 #define BROKER_RECVBUF 8192
 
@@ -117,14 +118,14 @@ static void broker_event_handler(evutil_socket_t sd, short flags, void *data) {
         for (size_t index = 0; index < broker_event_count; ++ index) event_del(broker_event_list[index]);
         return;
     }
-    char buf[1024];
+    char buf[BROKER_RECVBUF];
     ssize_t count = recv(sd, buf, sizeof buf, 0);
     if (count < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return;
         syslog(LOG_ERR, "Unable to read from listening UDP socket: %m");
         exit(EXIT_FAILURE);
     }
-    syslog(LOG_DEBUG, "Received UDP message: %.*s", (int) count, buf);
+    request_process(buf, count);
 }
 
 static int broker_parse_sockname(char *sockname, char **node, char **service) {

@@ -8,9 +8,9 @@ LDFLAGS?=-Xlinker -strip-all
 
 export BROKERADDR?=localhost:7874
 
-LIBS=-levent
-OBJS=main.o cmdopt.o broker.o
-HEADERS=config.h cmdopt.h broker.h
+LIBS=-levent -lyajl
+OBJS=main.o cmdopt.o broker.o request.o
+HEADERS=config.h cmdopt.h broker.h request.h
 
 build: $(FILESYSTEMNAME)
 
