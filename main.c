@@ -10,6 +10,7 @@
 #include "config.h"
 #include "cmdopt.h"
 #include "broker.h"
+#include "database.h"
 
 enum main_flags {
     MAIN_FLAGS_NONE,
@@ -88,6 +89,7 @@ static void main_setup_runloop(void) {
         perror("Unable to initialize libevent");
         exit(EXIT_FAILURE);
     }
+    database_init();
     broker_init(main_event_base);
 }
 

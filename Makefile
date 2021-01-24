@@ -7,10 +7,11 @@ CFLAGS?=-DNDEBUG -O3
 LDFLAGS?=-Xlinker -strip-all
 
 export BROKERADDR?=localhost:7874
+export DATABASEPATH?=pushd.db
 
-LIBS=-levent -lyajl
-OBJS=main.o cmdopt.o broker.o request.o
-HEADERS=config.h cmdopt.h broker.h request.h
+LIBS=-levent -lyajl -lsqlite3
+OBJS=main.o cmdopt.o broker.o request.o database.o
+HEADERS=config.h cmdopt.h broker.h request.h database.h
 
 build: $(FILESYSTEMNAME)
 
@@ -26,5 +27,5 @@ $(OBJS): %.o: %.c $(HEADERS)
 config.h: Makefile
 	echo "#ifndef CONFIG" > config.h
 	echo "#define CONFIG" >> config.h
-	for macro in FILESYSTEMNAME PRETTYNAME BROKERADDR; do echo "#define CONFIG_`echo $$macro | sed 's/\(NAME$$\|ADDR$$\)/_\1/'` \"`eval echo \\$$$$macro`\"" >> config.h; done
+	for macro in FILESYSTEMNAME PRETTYNAME BROKERADDR DATABASEPATH; do echo "#define CONFIG_`echo $$macro | sed 's/\(NAME$$\|ADDR$$\|PATH$$\)/_\1/'` \"`eval echo \\$$$$macro`\"" >> config.h; done
 	echo "#endif" >> config.h
