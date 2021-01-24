@@ -19,8 +19,6 @@
 
 #define BROKER_RECVBUF 8192
 
-#define syslog(l, ...) syslog(l, "[Broker] " __VA_ARGS__)
-
 static char const *broker_sockname = CONFIG_BROKER_ADDR;
 static struct event **broker_event_list = NULL;
 static size_t broker_event_count = 0;
@@ -113,7 +111,6 @@ addrinfo:
 static void broker_event_handler(evutil_socket_t sd, short flags, void *data) {
     (void) data;
     if (flags & EV_SIGNAL) {
-        syslog(LOG_DEBUG, "Terminating");
         event_del(broker_event_sigterm);
         for (size_t index = 0; index < broker_event_count; ++ index) event_del(broker_event_list[index]);
         return;
@@ -125,6 +122,7 @@ static void broker_event_handler(evutil_socket_t sd, short flags, void *data) {
         syslog(LOG_ERR, "Unable to read from listening UDP socket: %m");
         exit(EXIT_FAILURE);
     }
+    syslog(LOG_DEBUG, "Received a packet with a %zd byte request", count);
     request_process(buf, count);
 }
 

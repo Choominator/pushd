@@ -8,8 +8,6 @@
 #include "request.h"
 #include "database.h"
 
-#define syslog(l, ...) syslog(l, "[Request] " __VA_ARGS__)
-
 struct request {
     unsigned long long id;
     enum {
@@ -66,7 +64,7 @@ void request_process(char const *json, size_t len) {
     struct request request = {.id = ++ request_count};
     yajl_handle handle = yajl_alloc(&request_yajl_callbacks, NULL, &request);
     if (!handle) {
-        syslog(LOG_WARNING, "Not enough memory to parse request %llu", request.id);
+        syslog(LOG_WARNING, "Not enough memory to parse notification request #%llu", request.id);
         return;
     }
     yajl_status status = yajl_parse(handle, (unsigned char *) json, len);
@@ -76,37 +74,22 @@ void request_process(char const *json, size_t len) {
         case yajl_status_ok:
             break;
         case yajl_status_client_canceled:
-            if (request.state == REQUEST_STATE_MEMORY) syslog(LOG_WARNING, "Not enough memory to parse request %llu", request.id);
-            else syslog(LOG_NOTICE, "Request %llu is incorrectly structured", request.id);
+            if (request.state == REQUEST_STATE_MEMORY) syslog(LOG_WARNING, "Not enough memory to parse notification request #%llu", request.id);
+            else syslog(LOG_NOTICE, "Notification request #%llu has an unrecognized format", request.id);
             goto parse;
         default:;
             char *error = (char *) yajl_get_error(handle, 0, (unsigned char *) json, len);
-            syslog(LOG_NOTICE, "Failed to parse request %llu: %s", request.id, error);
+            syslog(LOG_NOTICE, "Failed to parse notification request #%llu: %s", request.id, error);
             yajl_free_error(handle, (unsigned char *) error);
             goto parse;
     }
-    switch (request.type) {
-        case REQUEST_TYPE_BACKGROUND:
-            if (request.group && request.collapse_id && request.payload) syslog(LOG_INFO, "Received request %llu to notify group %s in the background with a %zu byte payload", request.id, request.group, request.payload_len);
-            else syslog(LOG_NOTICE, "Received request %llu with missing data", request.id);
-            break;
-        case REQUEST_TYPE_NORMAL:
-            if (request.group && request.collapse_id && request.payload) syslog(LOG_INFO, "Received request %llu to notify group %s with a %zu byte payload", request.id, request.group, request.payload_len);
-            else syslog(LOG_NOTICE, "Received request %llu with missing data", request.id);
-            break;
-        case REQUEST_TYPE_URGENT:
-            if (request.group && request.collapse_id && request.payload) syslog(LOG_INFO, "Received request %llu to notify group %s urgently with a %zu byte payload", request.id, request.group, request.payload_len);
-            else syslog(LOG_NOTICE, "Received request %llu with missing data", request.id);
-            break;
-        case REQUEST_TYPE_REGISTER:
-            if (request.group && request.device) {
-                syslog(LOG_INFO, "Received request %llu to register device %s to group %s", request.id, request.device, request.group);
-                database_insert_group_device(request.group, request.group_len, request.device, request.device_len);
-            } else syslog(LOG_NOTICE, "Received request %llu with missing data", request.id);
-            break;
-        default:
-            abort();
-    }
+    if (request.type != REQUEST_TYPE_REGISTER && request.group && request.collapse_id && request.payload) {
+        char const *type = request.type == REQUEST_TYPE_URGENT ? "urgent" : request.type == REQUEST_TYPE_NORMAL ? "normal" : "background";
+        syslog(LOG_INFO, "Processed %s notification request #%llu to %s group with a %zu byte payload", type, request.id, request.group, request.payload_len);
+    } else if (request.type == REQUEST_TYPE_REGISTER && request.group && request.device) {
+        syslog(LOG_INFO, "Processed request #%llu to register device %s to group %s", request.id, request.device, request.group);
+        database_insert_group_device(request.group, request.group_len, request.device, request.device_len);
+    } else syslog(LOG_NOTICE, "Failed to process request #%llu because one or more of the required members isn't present", request.id);
 parse:
     yajl_free(handle);
     free(request.group);
