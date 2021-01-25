@@ -32,6 +32,7 @@ static void main_cleanup(void);
 int main(int argc, char *argv[]) {
     cmdopt_register('h', "Show help and exit", MAIN_FLAGS_HELP, (int *) &main_flags, NULL);
     cmdopt_register('f', "Stay in the foreground and log to standard error", MAIN_FLAGS_FOREGROUND, (int *) &main_flags, NULL);
+    database_cmdopt();
     broker_cmdopt();
     cmdopt_parse(argc, argv);
     if (main_flags & MAIN_FLAGS_HELP) cmdopt_help(argv[0], EXIT_SUCCESS);

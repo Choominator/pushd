@@ -30,7 +30,7 @@ static int broker_socket(struct addrinfo *addrinfo);
 static void broker_cleanup(void);
 
 void broker_cmdopt(void) {
-    cmdopt_register('l', "Listen for connections on the specified address and port", 0, NULL, &broker_sockname);
+    cmdopt_register('l', "UDP address and port to listen on", 0, NULL, &broker_sockname);
 }
 
 void broker_init(struct event_base *base) {
