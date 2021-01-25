@@ -103,6 +103,8 @@ int database_next_device(char const **device, size_t *device_len) {
         return 0;
     }
     int ret = 0;
+    *device = NULL;
+    *device_len = 0;
     if (status != SQLITE_DONE) ret = -1;
     sqlite3_reset(database_sqlite3_stmt_select_group_devices);
     return ret;
