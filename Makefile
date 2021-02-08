@@ -8,10 +8,12 @@ LDFLAGS?=-Xlinker -strip-all
 
 export BROKERADDR?=localhost:7874
 export DATABASEPATH?=pushd.db
+export CERTPATH=pushd.crt
+export KEYPATH=pushd.key
 
-LIBS=-levent -lyajl -lsqlite3
-OBJS=main.o cmdopt.o broker.o request.o database.o
-HEADERS=config.h cmdopt.h broker.h request.h database.h
+LIBS=-levent -lyajl -lssl -lcrypto -lnghttp2 -lsqlite3
+OBJS=main.o cmdopt.o broker.o request.o dispatch.o transport.o notification.o database.o
+HEADERS=config.h cmdopt.h broker.h request.h dispatch.h transport.h notification.h database.h
 
 build: $(FILESYSTEMNAME)
 
@@ -22,10 +24,10 @@ $(FILESYSTEMNAME): $(OBJS)
 	$(CC) $(LDFLAGS) $(LIBS) -o $(FILESYSTEMNAME) $^
 
 $(OBJS): %.o: %.c $(HEADERS)
-	$(CC) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -c -o $@ $<
 
 config.h: Makefile
-	echo "#ifndef CONFIG" > config.h
-	echo "#define CONFIG" >> config.h
-	for macro in FILESYSTEMNAME PRETTYNAME BROKERADDR DATABASEPATH; do echo "#define CONFIG_`echo $$macro | sed 's/\(NAME$$\|ADDR$$\|PATH$$\)/_\1/'` \"`eval echo \\$$$$macro`\"" >> config.h; done
-	echo "#endif" >> config.h
+	@echo "#ifndef CONFIG" > config.h
+	@echo "#define CONFIG" >> config.h
+	@for macro in FILESYSTEMNAME PRETTYNAME BROKERADDR DATABASEPATH CERTPATH KEYPATH; do echo "#define CONFIG_`echo $$macro | sed 's/\(NAME$$\|ADDR$$\|PATH$$\)/_\1/'` \"`eval echo \\$$$$macro`\"" >> config.h; done
+	@echo "#endif" >> config.h

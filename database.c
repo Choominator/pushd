@@ -100,7 +100,7 @@ int database_next_device(char const **device, size_t *device_len) {
     if (status == SQLITE_ROW) {
         *device = (char const *) sqlite3_column_text(database_sqlite3_stmt_select_group_devices, 0);
         *device_len = sqlite3_column_bytes(database_sqlite3_stmt_select_group_devices, 0);
-        return 0;
+        return 1;
     }
     int ret = 0;
     *device = NULL;

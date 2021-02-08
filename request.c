@@ -4,9 +4,12 @@
 
 #include <yajl/yajl_parse.h>
 #include <yajl/yajl_gen.h>
+#include <event2/event.h>
 
 #include "request.h"
 #include "database.h"
+#include "notification.h"
+#include "dispatch.h"
 
 struct request {
     unsigned long long id;
@@ -16,7 +19,7 @@ struct request {
         REQUEST_STATE_EXPIRATION,
         REQUEST_STATE_GROUP,
         REQUEST_STATE_DEVICE,
-        REQUEST_STATE_COLLAPSE_ID,
+        REQUEST_STATE_KEY,
         REQUEST_STATE_PAYLOAD,
         REQUEST_STATE_MEMORY,
         REQUEST_STATE_UNKNOWN
@@ -29,9 +32,9 @@ struct request {
     } type;
     unsigned depth;
     yajl_gen generator;
-    long long expiration;
-    char *group, *device, *collapse_id, *payload;
-    size_t group_len, device_len, collapse_id_len, payload_len;
+    time_t expiration;
+    char *group, *device, *key, *payload;
+    size_t group_len, device_len, key_len, payload_len;
 };
 
 static unsigned long long request_count = 0;
@@ -64,7 +67,7 @@ void request_process(char const *json, size_t len) {
     struct request request = {.id = ++ request_count};
     yajl_handle handle = yajl_alloc(&request_yajl_callbacks, NULL, &request);
     if (!handle) {
-        syslog(LOG_WARNING, "Not enough memory to parse notification request #%llu", request.id);
+        syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory to parse it", request.id);
         return;
     }
     yajl_status status = yajl_parse(handle, (unsigned char *) json, len);
@@ -74,27 +77,56 @@ void request_process(char const *json, size_t len) {
         case yajl_status_ok:
             break;
         case yajl_status_client_canceled:
-            if (request.state == REQUEST_STATE_MEMORY) syslog(LOG_WARNING, "Not enough memory to parse notification request #%llu", request.id);
-            else syslog(LOG_NOTICE, "Notification request #%llu has an unrecognized format", request.id);
+            if (request.state == REQUEST_STATE_MEMORY) syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory to parse it", request.id);
+            else syslog(LOG_NOTICE, "Dropping notification request #%llu because it has an unrecognized structure", request.id);
             goto parse;
         default:;
             char *error = (char *) yajl_get_error(handle, 0, (unsigned char *) json, len);
-            syslog(LOG_NOTICE, "Failed to parse notification request #%llu: %s", request.id, error);
+            syslog(LOG_NOTICE, "Dropping notification request #%llu due to a parse error: %s", request.id, error);
             yajl_free_error(handle, (unsigned char *) error);
             goto parse;
     }
-    if (request.type != REQUEST_TYPE_REGISTER && request.group && request.collapse_id && request.payload) {
+    if (request.type != REQUEST_TYPE_REGISTER && request.group && request.key && request.payload) {
         char const *type = request.type == REQUEST_TYPE_URGENT ? "urgent" : request.type == REQUEST_TYPE_NORMAL ? "normal" : "background";
         syslog(LOG_INFO, "Processed %s notification request #%llu to %s group with a %zu byte payload", type, request.id, request.group, request.payload_len);
+        notification_request_t *nreq = notification_request_create(request.id);
+        if (!nreq) {
+            syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory to dispatch it", request.id);
+            goto parse;
+        }
+        notification_request_set_type(nreq, request.type);
+        notification_request_set_expiration(nreq, request.expiration);
+        int error =
+        notification_request_set_group(nreq, request.group, request.group_len) < 0 ||
+        notification_request_set_key(nreq, request.key, request.key_len) < 0 ||
+        notification_request_set_payload(nreq, request.payload, request.payload_len);
+        if (error) {
+            syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory to dispatch it", request.id);
+            notification_request_destroy(nreq);
+            goto parse;
+        }
+        notification_queue_t *queue = notification_request_make_queue(nreq);
+        if (!queue) {
+            syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory to dispatch it", request.id);
+            notification_request_destroy(nreq);
+            goto parse;
+        }
+        if (!notification_queue_count(queue)) {
+            syslog(LOG_NOTICE, "Dropping notification request #%llu because %s does not have registered devices", request.id, request.group);
+            notification_queue_destroy(queue);
+            notification_request_destroy(nreq);
+            goto parse;
+        }
+        dispatch_enqueue(queue);
     } else if (request.type == REQUEST_TYPE_REGISTER && request.group && request.device) {
         syslog(LOG_INFO, "Processed request #%llu to register device %s to group %s", request.id, request.device, request.group);
         database_insert_group_device(request.group, request.group_len, request.device, request.device_len);
-    } else syslog(LOG_NOTICE, "Failed to process request #%llu because one or more of the required members isn't present", request.id);
+    } else syslog(LOG_NOTICE, "Dropping notification request #%llu because it's missing some or all of the required keys", request.id);
 parse:
     yajl_free(handle);
     free(request.group);
     free(request.device);
-    free(request.collapse_id);
+    free(request.key);
     free(request.payload);
 }
 
@@ -179,11 +211,11 @@ static int request_yajl_string(void *data, unsigned char const *value, size_t le
             if (!request->device) goto copy;
             request->device_len = len;
             break;
-        case REQUEST_STATE_COLLAPSE_ID:
-            free(request->collapse_id);
-            request->collapse_id = strndup((char const *) value, len);
-            if (!request->collapse_id) goto copy;
-            request->collapse_id_len = len;
+        case REQUEST_STATE_KEY:
+            free(request->key);
+            request->key = strndup((char const *) value, len);
+            if (!request->key) goto copy;
+            request->key_len = len;
             break;
         case REQUEST_STATE_PAYLOAD:
             if (request->depth <= 1) return 0;
@@ -232,7 +264,7 @@ static int request_yajl_map_key(void *data, unsigned char const *key, size_t len
             else if (len == sizeof "expiration" - 1 && !strncmp((char *) key, "expiration", len)) request->state = REQUEST_STATE_EXPIRATION;
             else if (len == sizeof "group" - 1 && !strncmp((char *) key, "group", len)) request->state = REQUEST_STATE_GROUP;
             else if (len == sizeof "device" - 1 && !strncmp((char *) key, "device", len)) request->state = REQUEST_STATE_DEVICE;
-            else if (len == sizeof "collapse_id" - 1 && !strncmp((char *) key, "collapse_id", len)) request->state = REQUEST_STATE_COLLAPSE_ID;
+            else if (len == sizeof "key" - 1 && !strncmp((char *) key, "key", len)) request->state = REQUEST_STATE_KEY;
             else if (len == sizeof "payload" - 1 && !strncmp((char *) key, "payload", len)) request->state = REQUEST_STATE_PAYLOAD;
             else request->state = REQUEST_STATE_UNKNOWN;
     }
