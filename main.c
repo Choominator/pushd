@@ -12,6 +12,7 @@
 #include "broker.h"
 #include "database.h"
 #include "notification.h"
+#include "channel.h"
 #include "dispatch.h"
 
 enum main_flags {
@@ -36,6 +37,7 @@ int main(int argc, char *argv[]) {
     cmdopt_register('f', "Stay in the foreground and log to standard error", MAIN_FLAGS_FOREGROUND, (int *) &main_flags, NULL);
     database_cmdopt();
     broker_cmdopt();
+    channel_cmdopt();
     dispatch_cmdopt();
     cmdopt_parse(argc, argv);
     if (main_flags & MAIN_FLAGS_HELP) cmdopt_help(argv[0], EXIT_SUCCESS);
@@ -92,6 +94,7 @@ static void main_setup_runloop(void) {
     }
     database_init();
     broker_init(main_event_base);
+    channel_init(main_event_base);
     dispatch_init(main_event_base);
 }
 

@@ -12,8 +12,8 @@ export CERTPATH=pushd.crt
 export KEYPATH=pushd.key
 
 LIBS=-levent -lyajl -lssl -lcrypto -lnghttp2 -lsqlite3
-OBJS=main.o cmdopt.o broker.o request.o dispatch.o transport.o notification.o database.o
-HEADERS=config.h cmdopt.h broker.h request.h dispatch.h transport.h notification.h database.h
+OBJS=main.o cmdopt.o broker.o request.o dispatch.o channel.o notification.o database.o
+HEADERS=config.h cmdopt.h broker.h request.h dispatch.h channel.h notification.h database.h
 
 build: $(FILESYSTEMNAME)
 

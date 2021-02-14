@@ -10,8 +10,9 @@ struct notification_request;
 
 struct notification {
     unsigned long long id;
-    char *device;
-    size_t device_len, payload_consumed;
+    char *device, *uuid, *response;
+    size_t device_len, uuid_len, response_len, payload_consumed;
+    int status;
     struct notification_request *request;
     struct notification *next, *prev;
 };
@@ -25,16 +26,19 @@ struct notification_request {
 };
 
 struct notification_queue {
-    struct notification *head, *tail;
-    size_t count;
+    struct notification dummy;
 };
 
 static unsigned long long notification_id = 0;
 
 notification_request_t *notification_request_create(unsigned long long id) {
+    syslog(LOG_DEBUG, "Creating request #%llu", id);
     struct notification_request *request = malloc(sizeof *request);
-    if (!request) return NULL;
-    *request = (struct notification_request) {.id = id};
+    if (!request) {
+        syslog(LOG_WARNING, "Aborting the creation of request #%llu due to insufficient memory", id);
+        return NULL;
+    }
+    *request = (struct notification_request) {.id = id, .refcount = 1};
     return request;
 }
 
@@ -70,11 +74,10 @@ int notification_request_set_payload(notification_request_t *request, char const
     return 0;
 }
 
-void notification_request_destroy(notification_request_t *request) {
-    if (request->refcount) {
-        syslog(LOG_ERR, "Attempting to destroy a notification request with a non-zero reference count");
-        abort();
-    }
+void notification_request_release(notification_request_t *request) {
+    -- request->refcount;
+    if (request->refcount) return;
+    syslog(LOG_DEBUG, "Destroying request #%llu", request->id);
     free(request->group);
     free(request->key);
     free(request->payload);
@@ -82,6 +85,7 @@ void notification_request_destroy(notification_request_t *request) {
 }
 
 notification_queue_t *notification_request_make_queue(notification_request_t *request) {
+    syslog(LOG_DEBUG, "Generating a notification queue from request #%llu", request->id);
     enum {
         MISSING_NONE,
         MISSING_GROUP = 1 << 0,
@@ -92,42 +96,43 @@ notification_queue_t *notification_request_make_queue(notification_request_t *re
     if (!request->key || !*request->key) missing |= MISSING_KEY;
     if (!request->payload || !*request->payload) missing |= MISSING_PAYLOAD;
     if (missing) {
-        syslog(LOG_NOTICE, "Dropping notification request #%llu due to missing fields:%s%s%s", request->id, missing & MISSING_GROUP ? " group" : "", missing & MISSING_KEY ? " key" : "", missing & MISSING_PAYLOAD ? " payload" : "");
+        syslog(LOG_NOTICE, "Dropping request #%llu due to missing fields:%s%s%s", request->id, missing & MISSING_GROUP ? " group" : "", missing & MISSING_KEY ? " key" : "", missing & MISSING_PAYLOAD ? " payload" : "");
         return NULL;
     }
     struct notification_queue *queue = notification_queue_create();
     if (!queue) {
-        syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory", request->id);
+        syslog(LOG_WARNING, "Dropping request #%llu due to insufficient memory to create the queue", request->id);
         return NULL;
     }
     if (database_select_group_devices(request->group, request->group_len) < 0) {
-        syslog(LOG_WARNING, "Dropping notification request #%llu due to a database error", request->id);
-        goto query;
+        syslog(LOG_WARNING, "Dropping request #%llu due to an error querying the database", request->id);
+        notification_queue_destroy(queue);
+        return NULL;
     }
+    size_t iterations = 0;
     for (;;) {
         char const *device;
         size_t len;
         int status = database_next_device(&device, &len);
-        if (status < 0) {
-            syslog(LOG_WARNING, "Droping notification request #%llu due to an error querying the database", request->id);
-            goto query;
-        } else if (!status) break;
+        if (status < 1) break;
+        syslog(LOG_DEBUG, "Creating notification #%llu for request #%llu", ++ notification_id, request->id);
         struct notification *notification = malloc(sizeof *notification);
-        if (!notification) goto notification;
-        *notification = (struct notification) {.id = ++ notification_id, .device = strndup(device, len), .device_len = len, .request = request, .prev = queue->tail};
-        ++ request->refcount;
-        if (queue->tail) queue->tail->next = notification;
-        else queue->head = notification;
-        queue->tail = notification;
-        ++ queue->count;
-        if (!device) {
-            syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory", request->id);
-            goto notification;
+        if (!notification) {
+            syslog(LOG_WARNING, "Aborting the creation of notification #%llu due to insufficient memory", notification_id);
+            break;
         }
+        *notification = (struct notification) {.id = notification_id, .device = strndup(device, len), .device_len = len, .request = request, .next = &queue->dummy, .prev = queue->dummy.prev};
+        notification->next->prev = notification;
+        notification->prev->next = notification;
+        ++ request->refcount;
+        if (!notification->device) {
+            syslog(LOG_WARNING, "Dropping notification #%llu due to insufficient memory to copy the device token", notification_id);
+            notification_destroy(notification);
+            break;
+        }
+        ++ iterations;
     }
-    return queue;
-notification:
-query:
+    if (iterations) return queue;
     notification_queue_destroy(queue);
     return NULL;
 }
@@ -135,62 +140,44 @@ query:
 notification_queue_t *notification_queue_create(void) {
     struct notification_queue *queue = malloc(sizeof *queue);
     if (!queue) return NULL;
-    *queue = (struct notification_queue) {.count = 0};
+    *queue = (struct notification_queue) {.dummy = {.next = &queue->dummy, .prev = &queue->dummy}};
     return queue;
 }
 
 void notification_queue_prepend(notification_queue_t *dst, notification_queue_t *src) {
-    if (!src->count) return;
-    src->tail->next = dst->head;
-    if (dst->head) dst->head->prev = src->tail;
-    else dst->tail = src->tail;
-    dst->head = src->head;
-    dst->count += src->count;
-    *src = (struct notification_queue) {.count = 0};
+    if (src->dummy.next == &src->dummy) return;
+    src->dummy.next->prev = &dst->dummy;
+    src->dummy.prev->next = dst->dummy.next;
+    dst->dummy.next->prev = src->dummy.prev;
+    dst->dummy.next = src->dummy.next;
+    *src = (struct notification_queue) {.dummy = {.next = &src->dummy, .prev = &src->dummy}};
 }
 
 void notification_queue_append(notification_queue_t *dst, notification_queue_t *src) {
-    if (!src->count) return;
-    src->head->prev = dst->tail;
-    if (dst->tail) dst->tail->next = src->head;
-    else dst->head = src->head;
-    dst->tail = src->tail;
-    dst->count += src->count;
-    *src = (struct notification_queue) {.count = 0};
-}
-
-void notification_queue_transfer(notification_queue_t *dst, notification_queue_t *src) {
-    if (!src->count) return;
-    struct notification *current = src->head;
-    src->head = current->next;
-    if (src->head) src->head->prev = NULL;
-    else src->tail = NULL;
-    -- src->count;
-    current->prev = dst->tail;
-    if (dst->tail) dst->tail->next = current;
-    else dst->head = current;
-    dst->tail = current;
-    ++ dst->count;
-    current->next = NULL;
+    if (src->dummy.next == &src->dummy) return;
+    src->dummy.next->prev = dst->dummy.prev;
+    src->dummy.prev->next = &dst->dummy;
+    dst->dummy.prev->next = src->dummy.next;
+    dst->dummy.prev = src->dummy.prev;
+    *src = (struct notification_queue) {.dummy = {.next = &src->dummy, .prev = &src->dummy}};
 }
 
 notification_t *notification_queue_peek(notification_queue_t *queue) {
-    return queue->head;
+    if (queue->dummy.next == &queue->dummy) return NULL;
+    return queue->dummy.next;
 }
 
-unsigned long long notification_queue_count(notification_queue_t const *queue) {
-    return queue->count;
+void notification_queue_transfer_notification(notification_queue_t *queue, notification_t *notification) {
+    notification->next->prev = notification->prev;
+    notification->prev->next = notification->next;
+    notification->next = &queue->dummy;
+    notification->prev = queue->dummy.prev;
+    notification->next->prev = notification;
+    notification->prev->next = notification;
 }
 
 void notification_queue_destroy(notification_queue_t *queue) {
-    while (queue->head) {
-        struct notification *current = queue->head;
-        queue->head = current->next;
-        free(current->device);
-        -- current->request->refcount;
-        if (!current->request->refcount) notification_request_destroy(current->request);
-        free(current);
-    }
+    while (queue->dummy.next != &queue->dummy) notification_destroy(queue->dummy.next);
     free(queue);
 }
 
@@ -228,14 +215,55 @@ size_t notification_read_payload(notification_t *notification, char *buf, size_t
     return count;
 }
 
-void notification_destroy(notification_t *notification, notification_queue_t *queue) {
-    if (notification->next) notification->next->prev = notification->prev;
-    else queue->tail = notification->prev;
-    if (notification->prev) notification->prev->next = notification->next;
-    else queue->head = notification->next;
-    -- queue->count;
+void notification_set_status(notification_t *notification, int status) {
+    notification->status = status;
+}
+
+void notification_set_uuid(notification_t *notification, char const *uuid, size_t len) {
+    free(notification->uuid);
+    notification->uuid = strndup(uuid, len);
+    if (!notification->uuid) {
+        syslog(LOG_WARNING, "Ignoring the UUID for notification #%llu due to insufficient memory", notification->id);
+        return;
+    }
+    notification->uuid_len = len;
+}
+
+void notification_append_response(notification_t *notification, char const *response, size_t len) {
+    if (!notification->response && notification->response_len) return;
+    notification->response_len += len;
+    char *tmp = realloc(notification->response, notification->response_len);
+    if (!tmp) {
+        syslog(LOG_WARNING, "Ignoring the response for notification #%llu due to insufficient memory", notification->id);
+        free(notification->response);
+        notification->response = NULL;
+        return;
+    }
+    notification->response = tmp;
+    memcpy(tmp + notification->response_len - len, response, len);
+}
+
+int notification_get_status(notification_t *notification) {
+    return notification->status;
+}
+
+void notification_get_uuid(notification_t *notification, char const **uuid, size_t *len) {
+    *uuid = notification->uuid;
+    *len = notification->uuid_len;
+}
+
+void notification_get_response(notification_t *notification, char const **response, size_t *len) {
+    *response = notification->response;
+    *len = notification->response ? notification->response_len : 0;
+}
+
+void notification_destroy(notification_t *notification) {
+    syslog(LOG_DEBUG, "Destroying notification #%llu", notification->id);
+    notification_request_release(notification->request);
+    notification->next->prev = notification->prev;
+    notification->prev->next = notification->next;
     free(notification->device);
-    -- notification->request->refcount;
-    if (!notification->request->refcount) notification_request_destroy(notification->request);
+    free(notification->response);
+    free(notification->uuid);
     free(notification);
 }

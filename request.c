@@ -102,22 +102,17 @@ void request_process(char const *json, size_t len) {
         notification_request_set_payload(nreq, request.payload, request.payload_len);
         if (error) {
             syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory to dispatch it", request.id);
-            notification_request_destroy(nreq);
+            notification_request_release(nreq);
             goto parse;
         }
         notification_queue_t *queue = notification_request_make_queue(nreq);
         if (!queue) {
             syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory to dispatch it", request.id);
-            notification_request_destroy(nreq);
-            goto parse;
-        }
-        if (!notification_queue_count(queue)) {
-            syslog(LOG_NOTICE, "Dropping notification request #%llu because %s does not have registered devices", request.id, request.group);
-            notification_queue_destroy(queue);
-            notification_request_destroy(nreq);
+            notification_request_release(nreq);
             goto parse;
         }
         dispatch_enqueue(queue);
+        notification_request_release(nreq);
     } else if (request.type == REQUEST_TYPE_REGISTER && request.group && request.device) {
         syslog(LOG_INFO, "Processed request #%llu to register device %s to group %s", request.id, request.device, request.group);
         database_insert_group_device(request.group, request.group_len, request.device, request.device_len);

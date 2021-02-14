@@ -17,14 +17,13 @@ void notification_request_set_expiration(notification_request_t *request, time_t
 int notification_request_set_group(notification_request_t *request, char const *group, size_t len);
 int notification_request_set_key(notification_request_t *request, char const *key, size_t len);
 int notification_request_set_payload(notification_request_t *request, char const *payload, size_t len);
-void notification_request_destroy(notification_request_t *request);
+void notification_request_release(notification_request_t *request);
 notification_queue_t *notification_request_make_queue(notification_request_t *request);
 notification_queue_t *notification_queue_create(void);
 void notification_queue_prepend(notification_queue_t *dst, notification_queue_t *src);
 void notification_queue_append(notification_queue_t *dst, notification_queue_t *src);
-void notification_queue_transfer(notification_queue_t *dst, notification_queue_t *src);
 notification_t *notification_queue_peek(notification_queue_t *queue);
-unsigned long long notification_queue_count(notification_queue_t const *queue);
+void notification_queue_transfer_notification(notification_queue_t *queue, notification_t *notification);
 void notification_queue_destroy(notification_queue_t *queue);
 unsigned long long notification_get_id(notification_t const *notification);
 unsigned long long notification_get_request_id(notification_t const *notification);
@@ -33,6 +32,12 @@ time_t notification_get_expiration(notification_t const *notification);
 void notification_get_device(notification_t const *notification, char const **device, size_t *len);
 void notification_get_key(notification_t const *notification, char const **key, size_t *len);
 size_t notification_read_payload(notification_t *notification, char *buf, size_t len);
-void notification_destroy(notification_t *notification, notification_queue_t *queue);
+void notification_set_status(notification_t *notification, int status);
+void notification_set_uuid(notification_t *notification, char const *uuid, size_t len);
+void notification_append_response(notification_t *notification, char const *response, size_t len);
+int notification_get_status(notification_t *notification);
+void notification_get_uuid(notification_t *notification, char const **uuid, size_t *len);
+void notification_get_response(notification_t *notification, char const **response, size_t *len);
+void notification_destroy(notification_t *notification);
 
 #endif
