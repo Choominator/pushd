@@ -12,7 +12,7 @@
 #include "cmdopt.h"
 #include "dispatch.h"
 
-#define DISPATCH_REQUEST_RATE "10"
+#define DISPATCH_REQUEST_RATE "5"
 #define DISPATCH_OVERFLOW_ALARM 60
 
 struct dispatch_session {
@@ -59,7 +59,7 @@ static struct channel_handlers dispatch_channel_handlers = {
 };
 
 void dispatch_cmdopt(void) {
-    cmdopt_register('r', "Limit the rate of requests per second per dispatch session (0 disables)", 0, NULL, &dispatch_request_rate);
+    cmdopt_register('r', "Rate of notifications per second per dispatch session (0 disables)", 0, NULL, &dispatch_request_rate);
 }
 
 void dispatch_init(struct event_base *base) {

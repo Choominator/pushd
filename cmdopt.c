@@ -15,14 +15,13 @@ struct cmdopt_spec {
     size_t count;
 };
 
-static struct cmdopt_spec *cmdopt_specs = NULL;
+static struct cmdopt_spec cmdopt_specs[62];
 static char cmdopt_switches[128] = ":";
 static char * cmdopt_switches_tail = cmdopt_switches + 1;
 
 static size_t cmdopt_index(char option);
 
 void cmdopt_parse(int argc, char *const argv[]) {
-    if (!cmdopt_specs) return;
     opterr = 0;
     size_t errors = 0;
     for (;;) {
@@ -48,17 +47,9 @@ void cmdopt_parse(int argc, char *const argv[]) {
         ++ errors;
     }
     if (errors) cmdopt_help(argv[0], EXIT_FAILURE);
-    free(cmdopt_specs);
 }
 
 void cmdopt_register(char option, char const *desc, int flag, int *flags, char const **arg) {
-    if (!cmdopt_specs) {
-        cmdopt_specs = calloc(62, sizeof *cmdopt_specs);
-        if (!cmdopt_specs) {
-            fprintf(stderr, "Unable to allocate memory for command line options\n");
-            exit(EXIT_FAILURE);
-        }
-    }
     size_t index = cmdopt_index(option);
     assert(!cmdopt_specs[index].desc);
     cmdopt_specs[index] = (struct cmdopt_spec) {
