@@ -780,7 +780,7 @@ static int channel_nghttp2_on_frame_recv(nghttp2_session *nghttp2, nghttp2_frame
 
 static int channel_nghttp2_on_header_recv(nghttp2_session *nghttp2, nghttp2_frame const *frame, uint8_t const *name, size_t name_len, uint8_t const *value, size_t value_len, uint8_t flags, void *arg) {
     (void) flags;
-    struct channel *channel = arg;
+    (void) arg;
     notification_t *notification = nghttp2_session_get_stream_user_data(nghttp2, frame->hd.stream_id);
     if (!notification) return 0;
     if (name_len == sizeof ":status" - 1 && strncmp((char const *) name, ":status", name_len) == 0) {
@@ -789,8 +789,6 @@ static int channel_nghttp2_on_header_recv(nghttp2_session *nghttp2, nghttp2_fram
         strncpy(status_str, (char const *) value, 3);
         status_str[3] = 0;
         int status = atoi(status_str);
-        if (status >= 200 && status < 300) syslog(LOG_INFO, "Delivery of notification #%llu through channel #%llu succeeded with status code %d", notification_get_id(notification), channel->id, status);
-        else syslog(LOG_NOTICE, "Delivery of notification #%llu through channel #%llu failed with status code %d", notification_get_id(notification), channel->id, status);
         notification_set_status(notification, status);
         return 0;
     }

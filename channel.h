@@ -6,7 +6,7 @@ typedef struct channel channel_t;
 struct channel_handlers {
     void (*on_connect)(void *arg);
     void (*on_respond)(notification_t *notification, void *arg);
-    void (*on_disconnect)(char const *reason, size_t reason_len, void *arg);
+    void (*on_disconnect)(char const *payload, size_t reason_len, void *arg);
     void (*on_cancel)(notification_queue_t *unsent, void *arg);
 };
 
