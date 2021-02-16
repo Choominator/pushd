@@ -276,7 +276,7 @@ int channel_post(channel_t *channel, notification_t *notification) {
         default:
             if (stream_id >= 0) {
                 channel_action(channel);
-                notification_queue_transfer_notification(channel->notification_queue, notification);
+                notification_queue_requeue_notification(channel->notification_queue, notification);
                 break;
             }
             syslog(LOG_ERR, "Unexpected error returned by nghttp2: %s", nghttp2_strerror(stream_id));

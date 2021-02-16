@@ -167,11 +167,11 @@ notification_t *notification_queue_peek(notification_queue_t *queue) {
     return queue->dummy.next;
 }
 
-void notification_queue_transfer_notification(notification_queue_t *queue, notification_t *notification) {
+void notification_queue_requeue_notification(notification_queue_t *queue, notification_t *notification) {
     notification->next->prev = notification->prev;
     notification->prev->next = notification->next;
-    notification->next = &queue->dummy;
-    notification->prev = queue->dummy.prev;
+    notification->next = queue->dummy.next;
+    notification->prev = &queue->dummy;
     notification->next->prev = notification;
     notification->prev->next = notification;
 }

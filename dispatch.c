@@ -8,9 +8,10 @@
 #include <event2/event.h>
 #include <yajl/yajl_parse.h>
 
+#include "cmdopt.h"
+#include "database.h"
 #include "notification.h"
 #include "channel.h"
-#include "cmdopt.h"
 #include "dispatch.h"
 
 #define DISPATCH_REQUEST_RATE "5"
@@ -283,8 +284,15 @@ static void dispatch_channel_on_respond(notification_t *notification, void *arg)
         if (!reason) syslog(level, "Response to notification #%llu request on dispatch session #%llu has UUID %.*s and status %d", notification_get_id(notification), session->id, (int) uuid_len, uuid, status);
         else syslog(level, "Response to notification #%llu request on dispatch session #%llu has UUID %.*s and status %d: %s", notification_get_id(notification), session->id, (int) uuid_len, uuid, status, reason);
         free(reason);
-    } else syslog(LOG_NOTICE, "Response for notification #%llu request on dispatch session #%llu didn't return a UUID or status code", notification_get_id(notification), session->id);
-    notification_destroy(notification);
+    } else syslog(LOG_NOTICE, "Response for notification #%llu request on dispatch session #%llu is invalid", notification_get_id(notification), session->id);
+    if (status == 410) {
+        char const *device;
+        size_t device_len;
+        notification_get_device(notification, &device, &device_len);
+        database_delete_device(device, device_len);
+    }
+    if (status && status < 500) notification_destroy(notification);
+    else notification_queue_requeue_notification(dispatch_notification_queue, notification);
     if (session->state != DISPATCH_SESSION_STATE_SUSPENDED) return;
     session->state = DISPATCH_SESSION_STATE_BUSY;
     if (event_add(session->event_work, &dispatch_timeval_work_period) < 0) {

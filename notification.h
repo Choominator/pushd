@@ -23,7 +23,7 @@ notification_queue_t *notification_queue_create(void);
 void notification_queue_prepend(notification_queue_t *dst, notification_queue_t *src);
 void notification_queue_append(notification_queue_t *dst, notification_queue_t *src);
 notification_t *notification_queue_peek(notification_queue_t *queue);
-void notification_queue_transfer_notification(notification_queue_t *queue, notification_t *notification);
+void notification_queue_requeue_notification(notification_queue_t *queue, notification_t *notification);
 void notification_queue_destroy(notification_queue_t *queue);
 unsigned long long notification_get_id(notification_t const *notification);
 unsigned long long notification_get_request_id(notification_t const *notification);
