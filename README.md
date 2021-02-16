@@ -24,6 +24,7 @@ After installing the development packages for the aforementioned dependencies, c
 
 Followed by building the project with:
 
+    $ cd pushd
     $ make
 
 Which should produce the final `pushd` executable binary.
@@ -50,7 +51,7 @@ Deploying is just a matter of copying the `pushd` executable binary to a destina
 
 ### Generating a Certificate
 
-This daemon uses client-side certificates to authenticate with APNS.  In order to obtain a certificate for the client-side authentication you need to generate a Certificate Signing Request (CSR) along with its unencrypted private key in the Privacy Enhanced Mail (PEM) format, submit the CSR to Apple at the developer portal (paid membership required), download the signed certificate, and convert it to the PEM format.
+This daemon uses client-side certificates to authenticate with APNs.  In order to obtain a certificate for the client-side authentication you need to generate a Certificate Signing Request (CSR) along with its unencrypted private key in the Privacy Enhanced Mail (PEM) format, submit the CSR to Apple at the developer portal (paid membership required), download the signed certificate, and convert it to the PEM format.
 
 You can generate a CSR named `pushd.csr` and its unencrypted private key named `pushd.key` in PEM format using the following command:
 
@@ -101,13 +102,26 @@ The `-s` option tells the Push Notifications Daemon to connect to the sandbox (d
 
 Specifying the `-p` option makes ``the Push Notifications Daemon connect to port 2197 instead of the traditional https 443 port.  This is useful to work around firewall rules aimed at blocking https traffic.
 
-With the `-c` and `-k` options you can specify the paths to the client certificate and their private key files respectively.  These options are useful to allow running multiple instances of the Push Notifications Daemon, as each instance corresponds to a single app bundle identifier.  The defaults for these options, unless modified at compile-time, are `pushd.crt` and `pushd.key` respectively.
+With the `-c` and `-k` options you can specify the paths to the client certificate and its private key files respectively.  These options are useful to allow running multiple instances of the Push Notifications Daemon, as each instance corresponds to a single app bundle identifier.  The defaults for these options, unless modified at compile-time, are `pushd.crt` and `pushd.key` respectively.
 
 The `-t` option specifies how often, in minutes, the Push Notifications Daemon sends HTTP/2 ping frames when the connection is idle.  The default for this option is 60 minutes, which is what Apple recommends, however you may need to lower this value if you run the daemon from behind a Network Address Translation (NAT) router.  You can disable ping frames completely by setting this option to 0.
 
 With the `-i` option you can specify how long, in hours, idle connections should last.  The Push Notifications Daemon follows a strategy that always prioritizes the latest connection when sending notifications, subject to the limits imposed either by the `-r` option (see below) or by the maximum number of concurrent HTTP/2 streams allowed by Apple, so older connections gravitate towards idleness and eventually get disconnected.  The default for this option is 24 hours, and setting it to a value of 0 makes idle connections remain active indefinitely, or at least until APNs shuts them down itself.
 
 The `-r` option throttles the rate of notification requests per second per connection.  The default for this option is 5 notifications per second per connection.  If your average rate of notification requests in a minute exceeds this value, new connections will be open to help drain the notifications queue.  Specifying a value of 0 disables this option, which makes it possible to send as many notifications as network conditions coupled with the maximum allowed number of HTTP/2 streams allow.
+
+### Interacting With the Daemon
+
+This daemon accepts input in the form of UDP packets containing complete JSON strings sent to its listening port.  The root object is always a dictionary with the following keys:
+
+* `type` - This key accepts string values and  is optional, and is used to set the request type.  It can either be set to `register` for group registration, to `background` to send a background notification, which is the default, to `normal` to send an alert, or to `urgent` to send an urgent alert.
+* `expiration` - This optional key accepts an integer that contains the Unix time, that is, the number of seconds since 1970-01-01 0:00:00 in UTC until which the notification is considered useful.  APNs will attempt to deliver the notifications generated from this request until this time expires, or only once if it's either not specified or specified as 0.
+* `group` - This key accepts a string and specifies the group to which a device token must be assigned or the group of device tokens to notify.  I might add the option to specify multiple groups in the form of an array of strings in the future.
+* `key` - This key accepts a string and specifies the collapse ID for the generated notifications, which causes multiple notifications to coalesce into a single alert displayed on the user's device.
+* `payload` - This key specifies the payload to send in the generated notifications.  The corresponding value for this key is any JSON data structure as defined at the [Generating a Remote Notification](https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server/generating_a_remote_notification) documentation page.
+* `device` - This key accepts a string containing the lower case hexadecimal representation of the device token to associate with the specified group.
+
+In the future I plan on accepting notification and registration requests on different ports.
 
 ## Example
 
@@ -163,11 +177,11 @@ At this point you can stop the project and copy the token, which will be useful 
 
 ### Testing the Daemon
 
-To test the daemon, follow the installation instructions above and force it to run in the foreground and connect to the sandbox APNs servers as follows:
+To test the daemon, follow the usage instructions above and force it to run in the foreground and connect to the sandbox APNs servers as follows:
 
     $ ./pushd -fs
 
-Which, if everything goes right, should display a message like the following, where 1 is the PID of the daemon and may be any other number on your system:
+Which, if everything goes right, should display a message like this, where 1 is the PID of the daemon and may be any other number on your system:
 
     pushd[1]: Push Notifications Daemon initialized successfully
 
@@ -216,3 +230,14 @@ Now you can press Control+C on both the `pushd` and `nc` terminals to force term
 On some systems (MacOS), the default buffer size for sockets is extremely small (2048 bytes), which is not enough to send larger notifications.  For this reason, `pushd` sets the receive buffer size on its end to 8192 bytes as part of its initialization process, however since the send buffer is equally small, your services should change it as well after creating the socket.
 
 In order to make sure that the server `pushd` is connecting to is really Apple's, the server certificate is being verified against the local certificate authority (CA) store, which may cause it to fail if you don't have the appropriate CA certificates.  In most cases, solving this problem only requires installing a package on your system, however if your system doesn't come with the appropriate root certificates, Apple provides links to them at the [Setting Up a Remote Notification Server](https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server) documentation page.
+
+## Future Plans
+
+The following is a list of changes that I intend to make in the future:
+
+* Split the registration from the notification requests;
+* Add support for all the notification types specified at the [Sending Notification Requests to APNs](https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server/sending_notification_requests_to_apns) documentation page;
+* Add the ability to notify multiple device groups uniquely with a single request;
+* Add support for token-based authentication;
+* Replace most of the command-line options with settings in a configuration file;
+* Make a single instance of the daemon able to handle multiple client-side certificates.
