@@ -29,10 +29,14 @@ void cmdopt_parse(int argc, char *const argv[]) {
         if (option == '?') {
             fprintf(stderr, "%s: Invalid option: -%c\n", argv[0], optopt);
             ++ errors;
-        } else if (option == ':') {
+            continue;
+        }
+        if (option == ':') {
             fprintf(stderr, "%s: Option requires an argument: -%c\n", argv[0], optopt);
             ++ errors;
-        } else if (option < 0) break;
+            continue;
+        }
+        if (option < 0) break;
         size_t index = cmdopt_index(option);
         if (cmdopt_specs[index].count ++) {
             fprintf(stderr, "%s: Option specified too many times: -%c\n", argv[0], option);
@@ -91,5 +95,5 @@ static size_t cmdopt_index(char option) {
     if (option < '0') abort();
     if (option - '0' <= '9' - '0') return option - '0' + 52;
     abort();
-    return 62;
+    return sizeof cmdopt_specs / sizeof *cmdopt_specs;
 }
