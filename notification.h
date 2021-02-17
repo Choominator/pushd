@@ -11,12 +11,13 @@ typedef struct notification notification_t;
 typedef struct notification_request notification_request_t;
 typedef struct notification_queue notification_queue_t;
 
-notification_request_t *notification_request_create(unsigned long long id);
+notification_request_t *notification_request_create(void);
+unsigned long long notification_request_get_id(notification_request_t *request);
 void notification_request_set_type(notification_request_t *request, enum notification_type type);
 void notification_request_set_expiration(notification_request_t *request, time_t expiration);
 int notification_request_set_group(notification_request_t *request, char const *group, size_t len);
 int notification_request_set_key(notification_request_t *request, char const *key, size_t len);
-int notification_request_set_payload(notification_request_t *request, char const *payload, size_t len);
+void notification_request_append_payload(notification_request_t *request, char const *chunk, size_t len);
 void notification_request_release(notification_request_t *request);
 notification_queue_t *notification_request_make_queue(notification_request_t *request);
 notification_queue_t *notification_queue_create(void);
@@ -34,7 +35,7 @@ void notification_get_key(notification_t const *notification, char const **key, 
 size_t notification_read_payload(notification_t *notification, char *buf, size_t len);
 void notification_set_status(notification_t *notification, int status);
 void notification_set_uuid(notification_t *notification, char const *uuid, size_t len);
-void notification_append_response(notification_t *notification, char const *response, size_t len);
+void notification_append_response(notification_t *notification, char const *chunk, size_t len);
 int notification_get_status(notification_t *notification);
 void notification_get_uuid(notification_t *notification, char const **uuid, size_t *len);
 void notification_get_response(notification_t *notification, char const **response, size_t *len);
