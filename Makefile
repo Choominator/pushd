@@ -23,7 +23,7 @@ $(FILESYSTEMNAME): $(OBJS)
 	$(CC) $(LDFLAGS) $(LIBS) -o $(FILESYSTEMNAME) $^
 
 $(OBJS): %.o: %.c $(HEADERS)
-	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -c -o $@ $<
+	$(CC) -std=c99 $(CFLAGS) -D_POSIX_C_SOURCE=200809L -c -o $@ $<
 
 config.h: Makefile
 	@echo "#ifndef CONFIG" > config.h

@@ -173,10 +173,10 @@ Now connect an actual device to your computer, select your device in Xcode's Pro
 
 Once you have allowed the app to display push notifications you should have something like the following on the debug console:
 
-Registering
-Authorized: true
-Success!
-Token:1ac599f0f90a6d178cec1f2298d51da23ab4717c7cc6896d707cdd9b90a02799
+    Registering
+    Authorized: true
+    Success!
+    Token:1ac599f0f90a6d178cec1f2298d51da23ab4717c7cc6896d707cdd9b90a02799
 
 At this point you can stop the project and copy the token, which will be useful to test the daemon below.
 
