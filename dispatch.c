@@ -289,10 +289,10 @@ static void dispatch_channel_on_respond(notification_t *notification, void *arg)
         char const *device;
         size_t device_len;
         notification_get_device(notification, &device, &device_len);
-        database_delete_device(device, device_len);
+        database_device_del(device, device_len);
     }
     if (status && status < 500) notification_destroy(notification);
-    else notification_queue_requeue_notification(dispatch_notification_queue, notification);
+    else notification_queue_requeue(dispatch_notification_queue, notification);
     if (session->state != DISPATCH_SESSION_STATE_SUSPENDED) return;
     session->state = DISPATCH_SESSION_STATE_BUSY;
     if (event_add(session->event_work, &dispatch_timeval_work_period) < 0) {

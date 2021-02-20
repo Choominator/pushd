@@ -50,7 +50,7 @@ void registration_process(char const *json, size_t len) {
         goto data;
     }
     syslog(LOG_INFO, "Received registration request to assign the device token %s to group %s", registration.device, registration.group);
-    database_insert_group_device(registration.group, registration.group_len, registration.device, registration.device_len);
+    database_subscribe(registration.device, registration.device_len, registration.group, registration.group_len);
 data:
     free(registration.group);
     free(registration.device);

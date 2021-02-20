@@ -117,14 +117,14 @@ This daemon accepts input in the form of UDP packets containing complete JSON st
 
 The dictionary for the group registration port accepts the following keys:
 
-* `group` - A mandatory key whose value must be a string containing the name of the group to register or modify;
 * `device` - A mandatory key whose value must be a string containing the lower-case hexadecimal representation of the device token to assign.
+* `group` - A mandatory key whose value must be a string containing the name of the group to register or modify;
 
 The dictionary sent to the notification request port accepts the following keys:
 
+* `groups` - A mandatory key whose value must be an array of strings containing the names of the device groups to notify.  This causes `pushd` to generate only one notification per device even if a device is registered to more than one of the specified groups.
 * `type` - An optional key whose value must be the string `"background"`, `"normal"`, or `"urgent"`, for background notifications, normal alerts, or urgent alerts respectively.  The default value if this key is not specified is `"background"`.
 * `expiration` - An optional key whose value must be an integer containing the Unix time, that is, the number of seconds elapsed since 1970-01-01 00:00:00 Coordinated Universal Time until which APNs should attempt to deliver the notifications, or `0` to only attempt to deliver them once.  The default value if this key is not specified is `0`.
-* `group` - A mandatory key whose value must be a string containing the name of the device group to notify.  This causes `pushd` to generate one notification per device in the group.
 * `key` - A mandatory key whose value must be a string of at most 64 bytes identifying the contents of the notification.  All notifications with the same value for this key will coalesce into a single alert.
 * `payload` - A mandatory key whose value must be a dictionary structured as specified by Apple at the [Generating a Remote Notification](https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server/generating_a_remote_notification) documentation page.
 
@@ -176,7 +176,7 @@ Once you have allowed the app to display push notifications you should have some
     Registering
     Authorized: true
     Success!
-    Token:1ac599f0f90a6d178cec1f2298d51da23ab4717c7cc6896d707cdd9b90a02799
+    Token:be6406fe9e686c11f999c9d47e33b41be56be48f0c77570423bb89f5b51cf127
 
 At this point you can stop the project and copy the token, which will be useful to test the daemon below.
 
@@ -194,18 +194,16 @@ Before sending notifications, the target device token that you copied from the d
 
     $ nc -u localhost:7734
 
-Nothing will happen, and no shell prompt will be displayed after this command, which is normal.
+And then entering the following JSON code:
 
-To register a device group, enter the following JSON code in a single line:
-
-    {"group": "Choom", "device": "1ac599f0f90a6d178cec1f2298d51da23ab4717c7cc6896d707cdd9b90a02799"}
+    {"device": "be6406fe9e686c11f999c9d47e33b41be56be48f0c77570423bb89f5b51cf127", "group": "Choom"}
 
 Which should result in the following additional log messages being displayed by `pushd` on its terminal:
 
     pushd[1]: Received a packet with a 97 byte registration request
-    pushd[1]: Received registration request to assign the device token 1ac599f0f90a6d178cec1f2298d51da23ab4717c7cc6896d707cdd9b90a02799 to group Choom
+    pushd[1]: Received registration request to assign the device token be6406fe9e686c11f999c9d47e33b41be56be48f0c77570423bb89f5b51cf127 to group Choom
 
-After registering the device token, you are now ready to send push notifications to the registered device group.
+After registering the device token, you will be ready to send push notifications to the registered device group.
 
 To send a notification you must first switch to the notification request port, so press Control+C on the `nc` terminal to return to the shell and enter the following command:
 
@@ -213,23 +211,24 @@ To send a notification you must first switch to the notification request port, s
 
 Followed by entering the following JSON code:
 
-    {"type": "urgent", "expiration": 0, "group": "Choom", "key": "hello" , "payload": {"aps": {"alert": "Hello world!"}}}
+    {"groups": ["Choom"], "type": "urgent", "key": "hello", "payload": {"aps": {"alert": "Hello world!"}}}
 
 Which should cause the following messages to be displayed on the `pushd` terminal:
 
-    pushd[1]: Received a packet with a 118 byte notification request
-    pushd[1]: Creating notification request #1
-    pushd[1]: Generating a notification queue from request #1 to Choom with a 32 byte payload
+    pushd[1]: Received a packet with a 103 byte notification request
+    pushd[1]: Preparing notification request #1
+    pushd[1]: Generating notifications for request #1
     pushd[1]: Creating notification #1 for request #1
+    pushd[1]: Generated 1 notifications for request #1
     pushd[1]: Starting dispatch session #1
     pushd[1]: Starting channel #1
     pushd[1]: Resolving api.sandbox.push.apple.com
-    pushd[1]: Connecting channel #1 to api.sandbox.push.apple.com [17.188.165.218] on port 443
+    pushd[1]: Connecting channel #1 to api.sandbox.push.apple.com [17.188.138.73] on port 443
     pushd[1]: Negotiating a TLS session on channel #1
     pushd[1]: Sending notification #1 through channel #1
-    pushd[1]: Response to notification #1 request on dispatch session #1 has UUID 66C6F244-840F-C66F-62B5-03A997D59022 and status 200
+    pushd[1]: Response to notification #1 request on dispatch session #1 has UUID B91B418D-9C12-31EC-51AD-012166CAB90A and status 200
     pushd[1]: Destroying notification #1
-    pushd[1]: Destroying notification request #1
+    pushd[1]: Freeing resources from request #1
 
 And if everything goes right, a notification should be displayed on your device.
 
@@ -239,14 +238,13 @@ Now you can press Control+C on both the `pushd` and `nc` terminals to force term
 
 On some systems (MacOS), the default buffer size for sockets is quite small (2048 bytes), which is not enough to send larger notifications.  For this reason, `pushd` sets the receive buffer size on its end to 8192 bytes as part of its initialization process, however since the send buffer is equally small, your services should change it as well after creating the socket to talk to `pushd`.
 
-In order to make sure that the server `pushd` is connecting to is really Apple's, the server certificate is being verified against the local certificate authority (CA) store, which may cause it to fail if you don't have the appropriate CA certificates.  In most cases, solving this problem only requires installing a package on your system, however if your system doesn't come with the appropriate root certificates, Apple provides links to them at the [Setting Up a Remote Notification Server](https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server) documentation page.
+In order to make sure that the server `pushd` is connecting to is really Apple's, the server certificate is being verified against the local certificate authority (CA) store, which may cause it to fail if you don't have the appropriate root certificates installed.  In most cases, solving this problem only requires installing a package on your system, however if your system doesn't come with the appropriate root certificates, Apple provides links to them at the [Setting Up a Remote Notification Server](https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server) documentation page.
 
 ## Future Plans
 
 The following is a list of changes that I intend to make in the future:
 
 * Add support for all the notification types specified at the [Sending Notification Requests to APNs](https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server/sending_notification_requests_to_apns) documentation page;
-* Add the ability to notify multiple device groups uniquely with a single request;
+* Make a single instance of the daemon able to handle multiple client-side certificates.
 * Add support for token-based authentication;
 * Replace most of the command-line options with settings in a configuration file;
-* Make a single instance of the daemon able to handle multiple client-side certificates.

@@ -8,23 +8,21 @@ enum notification_type {
 } type;
 
 typedef struct notification notification_t;
-typedef struct notification_request notification_request_t;
 typedef struct notification_queue notification_queue_t;
 
-notification_request_t *notification_request_create(void);
-unsigned long long notification_request_get_id(notification_request_t *request);
-void notification_request_set_type(notification_request_t *request, enum notification_type type);
-void notification_request_set_expiration(notification_request_t *request, time_t expiration);
-int notification_request_set_group(notification_request_t *request, char const *group, size_t len);
-int notification_request_set_key(notification_request_t *request, char const *key, size_t len);
-void notification_request_append_payload(notification_request_t *request, char const *chunk, size_t len);
-void notification_request_release(notification_request_t *request);
-notification_queue_t *notification_request_make_queue(notification_request_t *request);
+int notification_prepare(void);
+void notification_set_type(enum notification_type type);
+void notification_set_expiration(time_t expiration);
+int notification_add_group(char const *group, size_t len);
+int notification_set_key(char const *key, size_t len);
+void notification_append_payload(char const *chunk, size_t len);
+notification_queue_t *notification_gen_queue(void);
+void notification_abort(void);
 notification_queue_t *notification_queue_create(void);
 void notification_queue_prepend(notification_queue_t *dst, notification_queue_t *src);
 void notification_queue_append(notification_queue_t *dst, notification_queue_t *src);
 notification_t *notification_queue_peek(notification_queue_t *queue);
-void notification_queue_requeue_notification(notification_queue_t *queue, notification_t *notification);
+void notification_queue_requeue(notification_queue_t *queue, notification_t *notification);
 void notification_queue_destroy(notification_queue_t *queue);
 unsigned long long notification_get_id(notification_t const *notification);
 unsigned long long notification_get_request_id(notification_t const *notification);
