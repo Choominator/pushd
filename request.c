@@ -1,11 +1,11 @@
 #include <stdlib.h>
 #include <string.h>
-#include <syslog.h>
 
 #include <yajl/yajl_parse.h>
 #include <yajl/yajl_gen.h>
 #include <event2/event.h>
 
+#include "logger.h"
 #include "notification.h"
 #include "dispatch.h"
 #include "request.h"
@@ -41,19 +41,20 @@ void request_process(char const *json, size_t len) {
     request_yajl_payload_depth = 0;
     yajl_handle yajl = yajl_alloc(&request_yajl_callbacks, NULL, NULL);
     if (!yajl) {
-        syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory for the parser", notification_get_request_id(NULL));
+        logger_complain("Processing a notification request: Creating the JSON parser");
         goto yajl;
     }
     yajl_status status = yajl_parse(yajl, (unsigned char *) json, len);
     if (status == yajl_status_ok) status = yajl_complete_parse(yajl);
     if (request_yajl_gen) yajl_gen_free(request_yajl_gen);
     yajl_free(yajl);
-    if (status != yajl_status_ok) {
-        syslog(LOG_WARNING, "Dropping notification request #%llu due to a parser error", notification_get_request_id(NULL));
+    if (status == yajl_status_error) {
+        logger_complain("Processing a notification request: Parse error");
         goto parse;
     }
     notification_queue_t *queue = notification_gen_queue();
     if (queue) dispatch_enqueue(queue);
+    else logger_complain("Processing a notification request");
     return;
 parse:
 yajl:
@@ -100,6 +101,7 @@ static int request_yajl_root_map_key(void *arg, unsigned char const *key, size_t
         };
         return 1;
     }
+    logger_complain("Processing a notification request: Unknown key: %.*s", (int) len, (char const *) key);
     return 0;
 }
 
@@ -114,8 +116,11 @@ static int request_yajl_root_map_value_groups_array_start(void *arg) {
     request_yajl_callbacks = (yajl_callbacks) {
         .yajl_string = request_yajl_root_map_value_groups_array_string
     };
-    if (notification_add_group(NULL, 0) < 0) return 0;
+    if (notification_add_group(NULL, 0) < 0) goto reset;
     return 1;
+reset:
+    logger_complain("Processing a notification request");
+    return 0;
 }
 
 static int request_yajl_root_map_value_groups_array_string(void *arg, unsigned char const *value, size_t len) {
@@ -124,8 +129,11 @@ static int request_yajl_root_map_value_groups_array_string(void *arg, unsigned c
         .yajl_string = request_yajl_root_map_value_groups_array_string,
         .yajl_end_array = request_yajl_root_map_value_groups_array_end
     };
-    if (notification_add_group((char const *) value, len) < 0) return 0;
+    if (notification_add_group((char const *) value, len) < 0) goto prepare;
     return 1;
+prepare:
+    logger_complain("Processing a notification request");
+    return 0;
 }
 
 static int request_yajl_root_map_value_groups_array_end(void *arg) {
@@ -155,6 +163,7 @@ static int request_yajl_root_map_value_type_string(void *arg, unsigned char cons
         notification_set_type(NOTIFICATION_TYPE_URGENT);
         return 1;
     }
+    logger_complain("Processing a notification request: Unknown type: %.*s", (int) len, (char const *) value);
     return 0;
 }
 
@@ -180,31 +189,31 @@ static int request_yajl_root_map_value_key_string(void *arg, unsigned char const
 
 static int request_yajl_root_map_value_payload__null(void *arg) {
     (void) arg;
-    if (yajl_gen_null(request_yajl_gen) != yajl_gen_status_ok) return 0;
+    yajl_gen_null(request_yajl_gen);
     return 1;
 }
 
 static int request_yajl_root_map_value_payload__boolean(void *arg, int value) {
     (void) arg;
-    if (yajl_gen_bool(request_yajl_gen, value) != yajl_gen_status_ok) return 0;
+    yajl_gen_bool(request_yajl_gen, value);
     return 1;
 }
 
 static int request_yajl_root_map_value_payload__integer(void *arg, long long value) {
     (void) arg;
-    if (yajl_gen_integer(request_yajl_gen, value) != yajl_gen_status_ok) return 0;
+    yajl_gen_integer(request_yajl_gen, value);
     return 1;
 }
 
 static int request_yajl_root_map_value_payload__double(void *arg, double value) {
     (void) arg;
-    if (yajl_gen_double(request_yajl_gen, value) != 1) return 0;
+    yajl_gen_double(request_yajl_gen, value);
     return 1;
 }
 
 static int request_yajl_root_map_value_payload__string(void *arg, unsigned char const *value, size_t len) {
     (void) arg;
-    if (yajl_gen_string(request_yajl_gen, value, len) != yajl_gen_status_ok) return 0;
+    yajl_gen_string(request_yajl_gen, value, len);
     return 1;
 }
 
@@ -220,7 +229,7 @@ static int request_yajl_root_map_value_payload__map_start(void *arg) {
         yajl_gen_config(request_yajl_gen, yajl_gen_print_callback, request_yajl_append, NULL);
     }
     ++ request_yajl_payload_depth;
-    if (yajl_gen_map_open(request_yajl_gen) != yajl_gen_status_ok) return 0;
+    yajl_gen_map_open(request_yajl_gen);
     return 1;
 }
 
@@ -238,13 +247,13 @@ static int request_yajl_root_map_value_payload__map_key(void *arg, unsigned char
         .yajl_start_array = request_yajl_root_map_value_payload__array_start,
         .yajl_end_array = request_yajl_root_map_value_payload__array_end
     };
-    if (yajl_gen_string(request_yajl_gen, key, len) != yajl_gen_status_ok) return 0;
+    yajl_gen_string(request_yajl_gen, key, len);
     return 1;
 }
 
 static int request_yajl_root_map_value_payload__map_end(void *arg) {
     (void) arg;
-    if (yajl_gen_map_close(request_yajl_gen) != yajl_gen_status_ok) return 0;
+    yajl_gen_map_close(request_yajl_gen);
     -- request_yajl_payload_depth;
     if (!request_yajl_payload_depth) {
         request_yajl_callbacks = (yajl_callbacks) {
@@ -259,13 +268,13 @@ static int request_yajl_root_map_value_payload__map_end(void *arg) {
 
 static int request_yajl_root_map_value_payload__array_start(void *arg) {
     (void) arg;
-    if (yajl_gen_array_open(request_yajl_gen) != yajl_gen_status_ok) return 0;
+    yajl_gen_array_open(request_yajl_gen);
     return 1;
 }
 
 static int request_yajl_root_map_value_payload__array_end(void *arg) {
     (void) arg;
-    if (yajl_gen_array_close(request_yajl_gen) != yajl_gen_status_ok) return 0;
+    yajl_gen_array_close(request_yajl_gen);
     return 1;
 }
 

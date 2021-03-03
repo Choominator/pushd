@@ -1,16 +1,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <syslog.h>
 
-#include "notification.h"
+#include <event2/event.h>
+
+#include "logger.h"
 #include "database.h"
+#include "notification.h"
 
 struct notification {
     unsigned long long id, request_id;
     enum notification_type type;
     time_t expiration;
-    char *device, *key, *payload, *uuid, *response;
+    char *device, *key, *payload, uuid[36], *response;
     size_t device_len, key_len, payload_len, uuid_len, response_len, payload_consumed;
     int status;
     struct notification *next, *prev, *group_next, *group_prev;
@@ -26,10 +28,9 @@ static void notification_append_string(char **dst, size_t *dst_len, char const *
 static size_t notification_next_pow2(size_t value);
 
 int notification_prepare(void) {
-    syslog(LOG_DEBUG, "Preparing notification request #%llu", ++ notification_base.request_id);
-    notification_base = (struct notification) {.id = notification_base.id, .request_id = notification_base.request_id};
+    notification_base = (struct notification) {.id = notification_base.id, .request_id = notification_base.request_id + 1};
     if (database_query_reset() < 0) {
-        syslog(LOG_WARNING, "Dropping notification request #%llu due to a database error", notification_base.request_id);
+        logger_propagate("Preparing notification request #%llu", notification_base.request_id);
         return -1;
     }
     return 0;
@@ -46,7 +47,10 @@ void notification_set_expiration(time_t expiration) {
 int notification_set_key(char const *key, size_t len) {
     free(notification_base.key);
     notification_base.key = strndup(key, len);
-    if (!notification_base.key) return -1;
+    if (!notification_base.key) {
+        logger_propagate("Setting the key on notification request #%llu: Allocating memory: %s", notification_base.request_id, strerror(errno));
+        return -1;
+    }
     notification_base.key_len = len;
     return 0;
 }
@@ -61,33 +65,25 @@ int notification_add_group(char const *group, size_t len) {
 }
 
 notification_queue_t *notification_gen_queue(void) {
-    syslog(LOG_DEBUG, "Generating notifications for request #%llu", notification_base.request_id);
     if (!notification_base.key_len || !notification_base.payload_len) {
-        syslog(LOG_NOTICE, "Dropping notification request #%llu due to missing data", notification_base.request_id);
+        logger_propagate("Erroneus data");
         goto request;
     }
     struct notification_queue *queue = notification_queue_create();
-    if (!queue) {
-        syslog(LOG_WARNING, "Dropping notification request #%llu due to insufficient memory to create a queue", notification_base.request_id);
-        goto queue;
-    }
+    if (!queue) goto queue;
     unsigned long long iterations = 0;
     struct notification *last = NULL;
     for (;;) {
         char const *device;
         size_t len;
         int status = database_query_step(&device, &len);
-        if (status < 0) {
-            syslog(LOG_WARNING, "Aborting the generation of notifications for request #%llu due to a database error", notification_base.request_id);
-            break;
-        }
+        if (status < 0) goto database;
         if (status == 0) break;
-        syslog(LOG_DEBUG, "Creating notification #%llu for request #%llu", ++ notification_base.id, notification_base.request_id);
+        ++ notification_base.id;
         struct notification *notification = malloc(sizeof *notification);
         if (!notification) {
-            syslog(LOG_WARNING, "Dropping notification #%llu due to insufficient memory for its data structure", notification_base.id);
-            database_query_abort();
-            break;
+            logger_propagate("Allocating memory: %s", strerror(errno));
+            goto notification;
         }
         *notification = notification_base;
         notification->next = &queue->dummy;
@@ -104,31 +100,39 @@ notification_queue_t *notification_gen_queue(void) {
         notification->device = strndup(device, len);
         notification->device_len = len;
         if (!notification->device) {
-            syslog(LOG_WARNING, "Dropping notification #%llu due to insufficient memory to copy its device token", notification_base.id);
+            logger_propagate("Generating notification #%llu: Copying the device token: %s", notification_base.id, strerror(errno));
             notification_destroy(notification);
-            database_query_abort();
+            goto device;
             break;
         }
         ++ iterations;
     }
-    syslog(LOG_DEBUG, "Generated %llu notifications for request #%llu", iterations, notification_base.request_id);
+    logger_debug("Generated %llu notifications from request #%llu", iterations, notification_base.request_id);
     if (iterations) return queue;
+    else logger_propagate("No notifications generated");
+device:
+notification:
+    database_query_abort();
+database:
     notification_queue_destroy(queue);
 queue:
 request:
     free(notification_base.key);
     free(notification_base.payload);
+    logger_propagate("Generating notifications from request #%llu", notification_base.request_id);
     return NULL;
 }
 
 void notification_abort(void) {
-    syslog(LOG_DEBUG, "Aborting notification request #%llu", notification_base.request_id);
     database_query_abort();
 }
 
 notification_queue_t *notification_queue_create(void) {
     struct notification_queue *queue = malloc(sizeof *queue);
-    if (!queue) return NULL;
+    if (!queue) {
+        logger_propagate("Creating a notification queue: Allocating memory: %s", strerror(errno));
+        return NULL;
+    }
     *queue = (struct notification_queue) {.dummy = {.next = &queue->dummy, .prev = &queue->dummy}};
     return queue;
 }
@@ -175,11 +179,6 @@ unsigned long long notification_get_id(notification_t const *notification) {
     return notification->id;
 }
 
-unsigned long long notification_get_request_id(notification_t const *notification) {
-    if (!notification) return notification_base.request_id;
-    return notification->request_id;
-}
-
 enum notification_type notification_get_type(notification_t const *notification) {
     return notification->type;
 }
@@ -211,12 +210,8 @@ void notification_set_status(notification_t *notification, int status) {
 }
 
 void notification_set_uuid(notification_t *notification, char const *uuid, size_t len) {
-    free(notification->uuid);
-    notification->uuid = strndup(uuid, len);
-    if (!notification->uuid) {
-        syslog(LOG_WARNING, "Ignoring the UUID for notification #%llu due to insufficient memory", notification->id);
-        return;
-    }
+    if (len > sizeof notification->uuid) len = sizeof notification->uuid;
+    strncpy(notification->uuid, uuid, len);
     notification->uuid_len = len;
 }
 
@@ -229,7 +224,7 @@ int notification_get_status(notification_t *notification) {
 }
 
 void notification_get_uuid(notification_t *notification, char const **uuid, size_t *len) {
-    *uuid = notification->uuid;
+    *uuid = notification->uuid_len ? notification->uuid : NULL;
     *len = notification->uuid_len;
 }
 
@@ -239,21 +234,21 @@ void notification_get_response(notification_t *notification, char const **respon
 }
 
 void notification_destroy(notification_t *notification) {
-    syslog(LOG_DEBUG, "Destroying notification #%llu", notification->id);
     notification->next->prev = notification->prev;
     notification->prev->next = notification->next;
     free(notification->device);
     free(notification->response);
-    free(notification->uuid);
     if (notification->group_next != notification) {
         notification->group_next->group_prev = notification->group_prev;
         notification->group_prev->group_next = notification->group_next;
     } else {
-        syslog(LOG_DEBUG, "Freeing resources from request #%llu", notification->request_id);
         free(notification->key);
         free(notification->payload);
+        logger_debug("Freed resources from request #%llu", notification->request_id);
     }
+    unsigned long long id = notification->id;
     free(notification);
+    logger_debug("Destroyed notification #%llu", id);
 }
 
 static void notification_append_string(char **dst, size_t *dst_len, char const *src, size_t src_len) {

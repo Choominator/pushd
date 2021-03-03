@@ -39,6 +39,7 @@ The provided `Makefile` accepts some environment variables that you can pass to 
 * `DATABASEPATH` - Default path to the SQLite database file;
 * `CERTPATH` - Default path to the client certificate file;
 * `KEYPATH` - Default path to the private key file;
+* `LOGPATH` - Default path to the log file.
 
 The runtime defaults can be overridden by command line flags when you run the daemon, so you don't need to change the defaults.
 
@@ -70,13 +71,13 @@ Running the daemon is just a matter of calling the executable binary as follows:
 
     $ ./pushd
 
-If successful, the daemon will detach to the background immediately without outputting any messages, and all diagnostic messages will go to the default system logger.
+If successful, the daemon will detach to the background immediately without outputting any messages, and all diagnostic messages will go to the specified log file.
 
 ### Command-Line Options
 
 The following command line options are available:
 
-    Usage: ./pushd [-h] [-f] [-d ARG] [-l ARG] [-g ARG] [-n ARG] [-s] [-p] [-c ARG] [-k ARG] [-t ARG] [-i ARG] [-r ARG]
+    Usage: ./pushd [-h] [-f] [-d ARG] [-l ARG] [-g ARG] [-n ARG] [-s] [-p] [-c ARG] [-k ARG] [-t ARG] [-i ARG] [-r ARG] [-o ARG]
     -h    Show help and exit
     -f    Stay in the foreground and log to standard error
     -d    Path to the database [pushd.db]
@@ -90,6 +91,7 @@ The following command line options are available:
     -t    Ping period in minutes (0 disables) [60]
     -i    Idle timeout in hours (0 disables) [24]
     -r    Rate of notifications per second per dispatch session (0 disables) [5]
+    -o    Log file path [pushd.log]
 
 the `-h` option shows the above help message and terminates, ignoring all other options.
 
@@ -103,13 +105,15 @@ The `-s` option tells the Push Notifications Daemon to connect to the sandbox (d
 
 Specifying the `-p` option makes ``the Push Notifications Daemon connect to port 2197 instead of the traditional https 443 port.  This is useful to work around firewall rules aimed at blocking https traffic.
 
-With the `-c` and `-k` options you can specify the paths to the client certificate and its private key files respectively.  These options are useful to allow running multiple instances of the Push Notifications Daemon, as each instance corresponds to a single app bundle identifier.  The defaults for these options, unless modified at compile-time, are `pushd.crt` and `pushd.key` respectively.
+With the `-c` and `-k` options you can specify the paths to the client certificate and its private key files respectively.  These options are useful to allow running multiple instances of the Push Notifications Daemon, as each instance corresponds to a single app bundle identifier.  The defaults for these options, unless modified at compile-time, are `pushd.crt` and `pushd.key` respectively in the current working directory.
 
 The `-t` option specifies how often, in minutes, the Push Notifications Daemon sends HTTP/2 ping frames when the connection is idle.  The default for this option is 60 minutes, which is what Apple recommends, however you may need to lower this value if you run the daemon from behind a Network Address Translation (NAT) router.  You can disable ping frames completely by setting this option to 0.
 
 With the `-i` option you can specify how long, in hours, idle connections should last.  The Push Notifications Daemon follows a strategy that always prioritizes the latest connection when sending notifications, subject to the limits imposed either by the `-r` option (see below) or by the maximum number of concurrent HTTP/2 streams allowed by Apple, so older connections gravitate towards idleness and eventually get disconnected.  The default for this option is 24 hours, and setting it to a value of 0 makes idle connections remain active indefinitely, or at least until APNs shuts them down itself.
 
 The `-r` option throttles the rate of notification requests per second per connection.  The default for this option is 5 notifications per second per connection.  If your average rate of notification requests in a minute exceeds this value, new connections will be open to help drain the notifications queue.  Specifying a value of 0 disables this option, which makes it possible to send as many notifications as network conditions coupled with the maximum allowed number of HTTP/2 streams allow.
+
+the `-o` option sets the file to which log messages are appended.  The default for this option,  unless modified at compile-time, is a file named `pushd.log` in the current working directory.
 
 ### Communicating With the Daemon
 
@@ -188,11 +192,11 @@ To test the daemon, follow the usage instructions above to generate a signed cer
 
 Which, if everything goes right, should display a message like this, where 1 is the PID of the daemon and may be any other number on your system:
 
-    pushd[1]: Push Notifications Daemon initialized successfully
+    Info: Push Notifications Daemon initialized successfully
 
 Before sending notifications, the target device token that you copied from the debug console after running the test project must be added to the daemon.  To do so you must send a UDP packet instructing the daemon to do just that to its registration port.  One way to do that is by using `netcat`, or `nc` for short, on another terminal as follows:
 
-    $ nc -u localhost:7734
+    $ nc -u localhost 7734
 
 And then entering the following JSON code:
 
@@ -200,14 +204,14 @@ And then entering the following JSON code:
 
 Which should result in the following additional log messages being displayed by `pushd` on its terminal:
 
-    pushd[1]: Received a packet with a 97 byte registration request
-    pushd[1]: Received registration request to assign the device token be6406fe9e686c11f999c9d47e33b41be56be48f0c77570423bb89f5b51cf127 to group Choom
+    Debug: Received a 97 byte packet on a registration socket
+    Info: Processed a registration request to assign the device token be6406fe9e686c11f999c9d47e33b41be56be48f0c77570423bb89f5b51cf127 to group Choom
 
 After registering the device token, you will be ready to send push notifications to the registered device group.
 
 To send a notification you must first switch to the notification request port, so press Control+C on the `nc` terminal to return to the shell and enter the following command:
 
-    $ nc -u localhost:7874
+    $ nc -u localhost 7874
 
 Followed by entering the following JSON code:
 
@@ -215,20 +219,17 @@ Followed by entering the following JSON code:
 
 Which should cause the following messages to be displayed on the `pushd` terminal:
 
-    pushd[1]: Received a packet with a 103 byte notification request
-    pushd[1]: Preparing notification request #1
-    pushd[1]: Generating notifications for request #1
-    pushd[1]: Creating notification #1 for request #1
-    pushd[1]: Generated 1 notifications for request #1
-    pushd[1]: Starting dispatch session #1
-    pushd[1]: Starting channel #1
-    pushd[1]: Resolving api.sandbox.push.apple.com
-    pushd[1]: Connecting channel #1 to api.sandbox.push.apple.com [17.188.138.73] on port 443
-    pushd[1]: Negotiating a TLS session on channel #1
-    pushd[1]: Sending notification #1 through channel #1
-    pushd[1]: Response to notification #1 request on dispatch session #1 has UUID B91B418D-9C12-31EC-51AD-012166CAB90A and status 200
-    pushd[1]: Destroying notification #1
-    pushd[1]: Freeing resources from request #1
+    Debug: Received a 103 byte packet on a request socket
+    Debug: Generated 1 notifications from request #1
+    Debug: Created channel #1
+    Debug: Resolving api.sandbox.push.apple.com
+    Debug: Resolved api.sandbox.push.apple.com
+    Debug: Connecting to 17.188.166.29 port 443 on channel #1
+    Debug: Connection established on channel #1
+    Debug: Sending notification #1 through channel #1
+    Info: Response to notification #1 request on dispatch session #1 has UUID 375B7575-0AF4-0505-CFA7-BCD5530334D7 and status 200
+    Debug: Freed resources from request #1
+    Debug: Destroyed notification #1
 
 And if everything goes right, a notification should be displayed on your device.
 

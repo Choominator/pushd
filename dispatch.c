@@ -3,12 +3,12 @@
 #include <string.h>
 #include <time.h>
 #include <signal.h>
-#include <syslog.h>
 
 #include <event2/event.h>
 #include <yajl/yajl_parse.h>
 
 #include "cmdopt.h"
+#include "logger.h"
 #include "database.h"
 #include "notification.h"
 #include "channel.h"
@@ -17,6 +17,11 @@
 #define DISPATCH_REQUEST_RATE "5"
 #define DISPATCH_OVERFLOW_ALARM 60
 #define DISPATCH_RESPONSE_DEPTH_MAX 16
+
+enum dispatch_flags {
+    DISPATCH_FLAGS_NONE,
+    DISPATCH_FLAGS_TERMINATING = 1 << 0
+};
 
 struct dispatch_session {
     unsigned long long id;
@@ -40,6 +45,7 @@ struct dispatch_response {
     char *reason;
 };
 
+static enum dispatch_flags dispatch_flags = DISPATCH_FLAGS_NONE;
 static char const *dispatch_request_rate = DISPATCH_REQUEST_RATE;
 static struct timeval dispatch_timeval_work_period = {.tv_sec = 0, .tv_usec = 0};
 static struct event_base *dispatch_event_base = NULL;
@@ -129,6 +135,7 @@ void dispatch_enqueue(notification_queue_t *queue) {
 }
 
 static void dispatch_assess(void) {
+    if (dispatch_flags & DISPATCH_FLAGS_TERMINATING) return;
     if (!notification_queue_peek(dispatch_notification_queue)) return;
     if (event_pending(dispatch_event_overflow_alarm, EV_TIMEOUT, NULL)) return;
     if (!dispatch_session_list) {
@@ -142,7 +149,7 @@ static void dispatch_assess(void) {
             return;
         }
         if (event_add(dispatch_event_overflow_alarm, &res) < 0) {
-            syslog(LOG_ERR, "Terminating due to an error arming the overflow alarm");
+            logger_fail("Setting the overflow alarm timer event to pending: %s", strerror(errno));
             exit(EXIT_FAILURE);
         }
         return;
@@ -153,23 +160,19 @@ static void dispatch_assess(void) {
 }
 
 static void dispatch_session_start(void) {
-    syslog(LOG_DEBUG, "Starting dispatch session #%llu", ++ dispatch_session_id);
     struct dispatch_session *session = malloc(sizeof *session);
     if (!session) {
-        syslog(LOG_WARNING, "Aborting start of dispatch session #%llu due to insufficient memory", dispatch_session_id);
+        logger_propagate("Allocating memory: %s", strerror(errno));
         goto session;
     }
     struct event *event_work = evtimer_new(dispatch_event_base, dispatch_event_do_work, session);
     if (!event_work) {
-        syslog(LOG_WARNING, "Aborting start of dispatch session #%llu due to an error creating a work event handler: %m", dispatch_session_id);
+        logger_propagate("Creating a timer event handler: %s", strerror(errno));
         goto event_work;
     }
     channel_t *channel = channel_start(&dispatch_channel_handlers, session);
-    if (!channel) {
-        syslog(LOG_WARNING, "Aborting start of dispatch session #%llu because its channel failed to start", dispatch_session_id);
-        goto channel;
-    }
-    *session = (struct dispatch_session) {.id = dispatch_session_id, .event_work = event_work, .channel = channel, .next = dispatch_session_list};
+    if (!channel) goto channel;
+    *session = (struct dispatch_session) {.id = ++ dispatch_session_id, .event_work = event_work, .channel = channel, .next = dispatch_session_list};
     if (dispatch_session_list) dispatch_session_list->prev = session;
     dispatch_session_list = session;
     event_del(dispatch_event_overflow_alarm);
@@ -179,6 +182,7 @@ channel:
 event_work:
     free(session);
 session:
+    logger_complain("Creating dispatch session #%llu", ++ dispatch_session_id);
     dispatch_assess();
 }
 
@@ -187,12 +191,13 @@ static void dispatch_session_halt(struct dispatch_session *session) {
         channel_cancel(session->channel);
         return;
     }
-    syslog(LOG_DEBUG, "Terminating dispatch session #%llu", session->id);
     event_free(session->event_work);
     if (session->next) session->next->prev = session->prev;
     if (session->prev) session->prev->next = session->next;
     else dispatch_session_list = session->next;
+    unsigned long long id = session->id;
     free(session);
+    logger_debug("Terminated dispatch session #%llu", id);
 }
 
 static char *dispatch_response_get_reason(char const *response, size_t len) {
@@ -220,13 +225,16 @@ static void dispatch_event_do_work(evutil_socket_t sd, short events, void *arg) 
         event_del(dispatch_event_overflow_alarm);
         return;
     }
-    int status = channel_post(session->channel, notification);
-    switch (status) {
-        case 1:
+    enum channel_post_result result = channel_post(session->channel, notification);
+    switch (result) {
+        case CHANNEL_POST_RESULT_INVALID:
+            logger_complain("Sending notification #%llu in dispatch session #%llu", notification_get_id(notification), session->id);
+        case CHANNEL_POST_RESULT_SUCCESS:
             break;
-        case 0:
+        case CHANNEL_POST_RESULT_BUSY:
+            logger_debug("Sending notification #%llu in dispatch session #%llu", notification_get_id(notification), session->id);
             session->state = DISPATCH_SESSION_STATE_SUSPENDED;
-        case -1:
+        case CHANNEL_POST_RESULT_ERROR:
             return;
     }
     if (session->state < DISPATCH_SESSION_STATE_BUSY) {
@@ -234,13 +242,13 @@ static void dispatch_event_do_work(evutil_socket_t sd, short events, void *arg) 
         struct dispatch_session *current;
         for (current = dispatch_session_list; current && current->state >= DISPATCH_SESSION_STATE_BUSY; current = current->next);
         if (!current && event_add(dispatch_event_overflow_alarm, (struct timeval[]) {{.tv_sec = DISPATCH_OVERFLOW_ALARM}}) < 0) {
-            syslog(LOG_ERR, "Terminating due to an error arming the overflow alarm");
+            logger_fail("Setting a timer event to pending: %s", strerror(errno));
             exit(EXIT_FAILURE);
         }
     }
     if (event_add(session->event_work, &dispatch_timeval_work_period) < 0) {
-        syslog(LOG_WARNING, "Aborting dispatch session #%llu due to an error scheduling the next work event: %m", session->id);
         dispatch_session_halt(session);
+        logger_complain("Sending notification #%llu in dispatch session #%llu: Setting a timer event to pending: %s", notification_get_id(notification), session->id, strerror(errno));
     }
 }
 
@@ -256,7 +264,9 @@ static void dispatch_event_on_signal(evutil_socket_t sd, short events, void *arg
     (void) arg;
     switch (sd) {
         case SIGTERM:
+            dispatch_flags |= DISPATCH_FLAGS_TERMINATING;
             event_del(dispatch_event_sigterm);
+            event_del(dispatch_event_overflow_alarm);
             for (struct dispatch_session *current = dispatch_session_list, *next; current; current = next) {
                 next = current->next;
                 channel_stop(current->channel);
@@ -279,12 +289,11 @@ static void dispatch_channel_on_respond(notification_t *notification, void *arg)
     notification_get_response(notification, &response, &response_len);
     notification_get_uuid(notification, &uuid, &uuid_len);
     if (status >= 100 && uuid) {
-        int level = status < 300 ? LOG_INFO : LOG_NOTICE;
         char *reason = dispatch_response_get_reason(response, response_len);
-        if (!reason) syslog(level, "Response to notification #%llu request on dispatch session #%llu has UUID %.*s and status %d", notification_get_id(notification), session->id, (int) uuid_len, uuid, status);
-        else syslog(level, "Response to notification #%llu request on dispatch session #%llu has UUID %.*s and status %d: %s", notification_get_id(notification), session->id, (int) uuid_len, uuid, status, reason);
+        if (!reason) logger_report("Response to notification #%llu request on dispatch session #%llu has UUID %.*s and status %d", notification_get_id(notification), session->id, (int) uuid_len, uuid, status);
+        else logger_report("Response to notification #%llu request on dispatch session #%llu has UUID %.*s and status %d: %s", notification_get_id(notification), session->id, (int) uuid_len, uuid, status, reason);
         free(reason);
-    } else syslog(LOG_NOTICE, "Response for notification #%llu request on dispatch session #%llu is invalid", notification_get_id(notification), session->id);
+    } else logger_report("Response to notification #%llu request on dispatch session #%llu is invalid", notification_get_id(notification), session->id);
     if (status == 410) {
         char const *device;
         size_t device_len;
@@ -296,7 +305,7 @@ static void dispatch_channel_on_respond(notification_t *notification, void *arg)
     if (session->state != DISPATCH_SESSION_STATE_SUSPENDED) return;
     session->state = DISPATCH_SESSION_STATE_BUSY;
     if (event_add(session->event_work, &dispatch_timeval_work_period) < 0) {
-        syslog(LOG_WARNING, "Aborting dispatch session #%llu due to an error setting the work event to pending: %m", session->id);
+        logger_complain("Setting a timer event to pending: %s", session->id);
         dispatch_session_halt(session);
     }
 }
@@ -304,8 +313,7 @@ static void dispatch_channel_on_respond(notification_t *notification, void *arg)
 static void dispatch_channel_on_disconnect(char const *payload, size_t len, void *arg) {
     struct dispatch_session *session = arg;
     char *reason = payload ? dispatch_response_get_reason(payload, len) : NULL;
-    if (!reason) syslog(LOG_DEBUG, "Shutting down dispatch session #%llu", session->id);
-    else syslog(LOG_NOTICE, "Shutting down dispatch session #%llu: %s", session->id, reason);
+    if (reason) logger_report("Received order to shut down dispatch session #%llu: %s", session->id, reason);
     free(reason);
     session->state = DISPATCH_SESSION_STATE_DISCONNECTED;
 }

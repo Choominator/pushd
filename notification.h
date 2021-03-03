@@ -25,7 +25,6 @@ notification_t *notification_queue_peek(notification_queue_t *queue);
 void notification_queue_requeue(notification_queue_t *queue, notification_t *notification);
 void notification_queue_destroy(notification_queue_t *queue);
 unsigned long long notification_get_id(notification_t const *notification);
-unsigned long long notification_get_request_id(notification_t const *notification);
 enum notification_type notification_get_type(notification_t const *notification);
 time_t notification_get_expiration(notification_t const *notification);
 void notification_get_device(notification_t const *notification, char const **device, size_t *len);

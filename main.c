@@ -2,13 +2,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
-#include <syslog.h>
 #include <sys/wait.h>
 
 #include <event2/event.h>
 
 #include "config.h"
 #include "cmdopt.h"
+#include "logger.h"
 #include "broker.h"
 #include "database.h"
 #include "notification.h"
@@ -26,10 +26,7 @@ static struct event_base *main_event_base = NULL;
 
 static void main_foreground(void);
 static void main_background(void);
-static void main_setup_runloop(void);
-static void main_runloop(void);
-static void main_event_log_stderr(int severity, char const *msg);
-static void main_event_log_syslog(int severity, char const *msg);
+static void main_event_log(int severity, char const *msg);
 static void main_cleanup(void);
 
 int main(int argc, char *argv[]) {
@@ -39,14 +36,26 @@ int main(int argc, char *argv[]) {
     broker_cmdopt();
     channel_cmdopt();
     dispatch_cmdopt();
+    logger_cmdopt();
     cmdopt_parse(argc, argv);
     if (main_flags & MAIN_FLAGS_HELP) cmdopt_help(argv[0], EXIT_SUCCESS);
-    main_setup_runloop();
+    atexit(main_cleanup);
+    event_set_log_callback(main_event_log);
+    main_event_base = event_base_new();
+    if (!main_event_base) {
+        perror("Unable to initialize libevent");
+        exit(EXIT_FAILURE);
+    }
+    database_init();
+    broker_init(main_event_base);
+    channel_init(main_event_base);
+    dispatch_init(main_event_base);
+    logger_init(main_event_base, main_flags & MAIN_FLAGS_FOREGROUND);
     if (main_flags & MAIN_FLAGS_FOREGROUND) main_foreground();
     else main_background();
-    syslog(LOG_INFO, CONFIG_PRETTY_NAME " initialized successfully");
-    main_runloop();
-    syslog(LOG_INFO, "Terminating gracefully");
+    logger_report(CONFIG_PRETTY_NAME " initialized successfully");
+    event_base_dispatch(main_event_base);
+    logger_report("Terminated");
     return EXIT_SUCCESS;
 }
 
@@ -59,8 +68,6 @@ static void main_foreground(void) {
         perror("Unable to redirect the standard output to /dev/null");
         exit(EXIT_FAILURE);
     }
-    openlog(CONFIG_FILESYSTEM_NAME, LOG_PERROR | LOG_PID, LOG_DAEMON);
-    atexit(closelog);
 }
 
 static void main_background(void) {
@@ -80,51 +87,11 @@ static void main_background(void) {
     if (pid < 0) exit(EXIT_FAILURE);
     if (pid > 0) exit(EXIT_SUCCESS);
     event_reinit(main_event_base);
-    openlog(CONFIG_FILESYSTEM_NAME, LOG_PID, LOG_DAEMON);
-    atexit(closelog);
 }
 
-static void main_setup_runloop(void) {
-    atexit(main_cleanup);
-    event_set_log_callback(main_event_log_stderr);
-    main_event_base = event_base_new();
-    if (!main_event_base) {
-        perror("Unable to initialize libevent");
-        exit(EXIT_FAILURE);
-    }
-    database_init();
-    broker_init(main_event_base);
-    channel_init(main_event_base);
-    dispatch_init(main_event_base);
-}
-
-static void main_runloop(void) {
-    event_set_log_callback(main_event_log_syslog);
-    event_base_dispatch(main_event_base);
-}
-
-static void main_event_log_stderr(int severity, char const *msg) {
-    if (severity == EVENT_LOG_ERR) fprintf(stderr, "Libevent error: %s\n", msg);
-}
-
-static void main_event_log_syslog(int severity, char const *msg) {
-    switch (severity) {
-        case EVENT_LOG_DEBUG:
-            severity = LOG_DEBUG;
-            break;
-        case EVENT_LOG_MSG:
-            severity = LOG_INFO;
-            break;
-        case EVENT_LOG_WARN:
-            severity = LOG_WARNING;
-            break;
-        case EVENT_LOG_ERR:
-            severity = LOG_ERR;
-            break;
-        default:
-            abort();
-    }
-    syslog(severity, "From libevent: %s", msg);
+static void main_event_log(int severity, char const *msg) {
+    (void) severity;
+    (void) msg;
 }
 
 static void main_cleanup(void) {

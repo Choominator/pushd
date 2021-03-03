@@ -2,10 +2,12 @@
 #include <stdlib.h>
 
 #include <sqlite3.h>
+#include <event2/event.h>
 
 #include "config.h"
-#include "database.h"
 #include "cmdopt.h"
+#include "logger.h"
+#include "database.h"
 
 enum database_flags {
     DATABASE_FLAGS_NONE,
@@ -88,46 +90,71 @@ void database_init(void) {
 }
 
 int database_subscribe(char const *device, size_t device_len, char const *group, size_t group_len) {
-    if (database_transaction_begin() < 0) return -1;
+    if (database_transaction_begin() < 0) goto transaction;
     sqlite3_int64 device_id = database_generic_select(device, device_len, database_sqlite3_stmt_device_by_token);
     if (device_id == 0) device_id = database_generic_insert(device, device_len, database_sqlite3_stmt_device_add);
-    if (device_id < 0) goto transaction;
+    if (device_id < 0) {
+        logger_propagate("Querying or inserting a device");
+        goto query;
+    }
     sqlite3_int64 group_id = database_generic_select(group, group_len, database_sqlite3_stmt_group_by_name);
     if (group_id == 0) group_id = database_generic_insert(group, group_len, database_sqlite3_stmt_group_add);
-    if (group_id < 0) goto transaction;
-    if (database_insert_rel(device_id, group_id) < 0) goto transaction;
-    if (database_transaction_commit() < 0) goto transaction;
+    if (group_id < 0) {
+        logger_propagate("Querying or inserting a group");
+        goto query;
+    }
+    if (database_insert_rel(device_id, group_id) < 0) goto query;
+    if (database_transaction_commit() < 0) goto query;
     return 0;
-transaction:
+query:
     database_transaction_rollback();
+transaction:
+    logger_propagate("Relating a device to a group");
     return -1;
 }
 
 int database_query_reset(void) {
-    if (~database_flags & DATABASE_FLAGS_TRANSACTION && database_transaction_begin() < 0) return -1;
-    if (sqlite3_step(database_sqlite3_stmt_group_list_clear) != SQLITE_DONE) goto transaction;
+    if (~database_flags & DATABASE_FLAGS_TRANSACTION && database_transaction_begin() < 0) goto transaction;
+    if (sqlite3_step(database_sqlite3_stmt_group_list_clear) != SQLITE_DONE) goto query;
     sqlite3_reset(database_sqlite3_stmt_group_list_clear);
     return 0;
-transaction:
+query:
+    logger_propagate("Clearing groups: %s", sqlite3_errmsg(database_sqlite3));
     database_transaction_rollback();
+transaction:
+    logger_propagate("Resetting the group devices query");
     return -1;
 }
 
 int database_query_add_group(char const *group, size_t group_len) {
-    if (~database_flags & DATABASE_FLAGS_TRANSACTION) abort();
-    if (sqlite3_bind_text(database_sqlite3_stmt_group_list_add, 1, group, group_len, SQLITE_TRANSIENT) != SQLITE_OK) goto transaction;
-    int status = sqlite3_step(database_sqlite3_stmt_group_list_add);
+    if (~database_flags & DATABASE_FLAGS_TRANSACTION) {
+        logger_fail("Attempted to add groups to the device group query without resetting first");
+        abort();
+    }
+    if (sqlite3_bind_text(database_sqlite3_stmt_group_list_add, 1, group, group_len, SQLITE_TRANSIENT) != SQLITE_OK) {
+        logger_propagate("Binding a value: %s", sqlite3_errmsg(database_sqlite3));
+        goto transaction;
+    }
+    if (sqlite3_step(database_sqlite3_stmt_group_list_add) != SQLITE_DONE) {
+        logger_propagate("Adding a group: %s", sqlite3_errmsg(database_sqlite3));
+        goto query;
+    }
     sqlite3_clear_bindings(database_sqlite3_stmt_group_list_add);
-    if (status != SQLITE_DONE) goto transaction;
     sqlite3_reset(database_sqlite3_stmt_group_list_add);
     return 0;
-transaction:
+query:
+    sqlite3_clear_bindings(database_sqlite3_stmt_group_list_add);
     database_transaction_rollback();
+transaction:
+    logger_propagate("Preparing the devices group query");
     return -1;
 }
 
 int database_query_step(char const **device, size_t *device_len) {
-    if (~database_flags & DATABASE_FLAGS_TRANSACTION) abort();
+    if (~database_flags & DATABASE_FLAGS_TRANSACTION) {
+        logger_fail("Attempted to run the devices query without resetting it first");
+        abort();
+    }
     int status = sqlite3_step(database_sqlite3_stmt_devices_by_group_list);
     if (status == SQLITE_ROW) {
         *device = (char const *) sqlite3_column_text(database_sqlite3_stmt_devices_by_group_list, 0);
@@ -136,12 +163,14 @@ int database_query_step(char const **device, size_t *device_len) {
     }
     *device = NULL;
     *device_len = 0;
-    sqlite3_clear_bindings(database_sqlite3_stmt_devices_by_group_list);
-    if (status != SQLITE_DONE) goto transaction;
+    if (status != SQLITE_DONE) {
+        logger_propagate("Querying for devices: %s", sqlite3_errmsg(database_sqlite3));
+        goto query;
+    }
     sqlite3_reset(database_sqlite3_stmt_devices_by_group_list);
     database_transaction_rollback();
     return 0;
-transaction:
+query:
     database_transaction_rollback();
     return -1;
 }
@@ -149,21 +178,33 @@ transaction:
 void database_query_abort(void) {
     if (~database_flags & DATABASE_FLAGS_TRANSACTION) return;
     sqlite3_reset(database_sqlite3_stmt_devices_by_group_list);
-    sqlite3_clear_bindings(database_sqlite3_stmt_devices_by_group_list);
     database_transaction_rollback();
 }
 
 int database_device_del(char const *device, size_t device_len) {
-    if (sqlite3_bind_text(database_sqlite3_stmt_device_del, 1, device, device_len, SQLITE_TRANSIENT) != SQLITE_OK) return -1;
-    int status = sqlite3_step(database_sqlite3_stmt_device_del);
+    if (sqlite3_bind_text(database_sqlite3_stmt_device_del, 1, device, device_len, SQLITE_TRANSIENT) != SQLITE_OK) {
+        logger_propagate("Binding a value: %s", sqlite3_errmsg(database_sqlite3));
+        goto bind;
+    }
+    if (sqlite3_step(database_sqlite3_stmt_device_del) != SQLITE_DONE) {
+        logger_propagate("Running the query: %s", sqlite3_errmsg(database_sqlite3));
+        goto query;
+    }
     sqlite3_clear_bindings(database_sqlite3_stmt_device_del);
-    if (status != SQLITE_DONE) return -1;
     sqlite3_reset(database_sqlite3_stmt_device_del);
     return 0;
+query:
+    sqlite3_clear_bindings(database_sqlite3_stmt_device_del);
+bind:
+    logger_propagate("Deleting a device");
+    return -1;
 }
 
 static int database_transaction_begin(void) {
-    if (sqlite3_step(database_sqlite3_stmt_transaction_begin) != SQLITE_DONE) return -1;
+    if (sqlite3_step(database_sqlite3_stmt_transaction_begin) != SQLITE_DONE) {
+        logger_propagate("Starting a transaction: %s", sqlite3_errmsg(database_sqlite3));
+        return -1;
+    }
     sqlite3_reset(database_sqlite3_stmt_transaction_begin);
     database_flags |= DATABASE_FLAGS_TRANSACTION;
     return 0;
@@ -176,14 +217,20 @@ static void database_transaction_rollback(void) {
 }
 
 static int database_transaction_commit(void) {
-    if (sqlite3_step(database_sqlite3_stmt_transaction_commit) != SQLITE_DONE) return -1;
+    if (sqlite3_step(database_sqlite3_stmt_transaction_commit) != SQLITE_DONE) {
+        logger_propagate("Committing the transaction: %s", sqlite3_errmsg(database_sqlite3));
+        return -1;
+    }
     sqlite3_reset(database_sqlite3_stmt_transaction_commit);
     database_flags &= ~DATABASE_FLAGS_TRANSACTION;
     return 0;
 }
 
 static sqlite3_int64 database_generic_select(char const *value, size_t len, sqlite3_stmt *statement) {
-    if (sqlite3_bind_text(statement, 1, value, len, SQLITE_TRANSIENT) != SQLITE_OK) return -1;
+    if (sqlite3_bind_text(statement, 1, value, len, SQLITE_TRANSIENT) != SQLITE_OK) {
+        logger_propagate("Binding a value: %s", sqlite3_errmsg(database_sqlite3));
+        return -1;
+    }
     sqlite3_int64 ret = -1;
     int status = sqlite3_step(statement);
     if (status != SQLITE_ROW) goto query;
@@ -192,27 +239,43 @@ query:
     if (status == SQLITE_DONE || status == SQLITE_ROW) sqlite3_reset(statement);
     sqlite3_clear_bindings(statement);
     if (status == SQLITE_DONE) return 0;
+    else if (status != SQLITE_ROW) logger_propagate("Running the query: %s", sqlite3_errmsg(database_sqlite3));
     return ret;
 }
 
 static sqlite3_int64 database_generic_insert(char const *value, size_t len, sqlite3_stmt *statement) {
-    if (sqlite3_bind_text(statement, 1, value, len, SQLITE_TRANSIENT) != SQLITE_OK) return -1;
+    if (sqlite3_bind_text(statement, 1, value, len, SQLITE_TRANSIENT) != SQLITE_OK) {
+        logger_propagate("Binding value: %s", sqlite3_errmsg(database_sqlite3));
+        return -1;
+    }
     sqlite3_int64 ret = -1;
     int status = sqlite3_step(statement);
     if (status != SQLITE_DONE) goto query;
     ret = sqlite3_last_insert_rowid(database_sqlite3);
 query:
-    if (status == SQLITE_DONE) sqlite3_reset(statement);
     sqlite3_clear_bindings(statement);
+    if (status == SQLITE_DONE) sqlite3_reset(statement);
+    else logger_propagate("Running the query: %s", sqlite3_errmsg(database_sqlite3));
     return ret;
 }
 
 static int database_insert_rel(sqlite3_int64 device_id, sqlite3_int64 group_id) {
-    if (sqlite3_bind_int64(database_sqlite3_stmt_subscription_add, 1, device_id) != SQLITE_OK) return -1;
-    if (sqlite3_bind_int64(database_sqlite3_stmt_subscription_add, 2, group_id) != SQLITE_OK) return -1;
-    if (sqlite3_step(database_sqlite3_stmt_subscription_add) != SQLITE_DONE) return -1;
+    if (sqlite3_bind_int64(database_sqlite3_stmt_subscription_add, 1, device_id) != SQLITE_OK || sqlite3_bind_int64(database_sqlite3_stmt_subscription_add, 2, group_id) != SQLITE_OK) {
+        logger_propagate("Binding a value: %s", sqlite3_errmsg(database_sqlite3));
+        goto bind;
+    }
+    if (sqlite3_step(database_sqlite3_stmt_subscription_add) != SQLITE_DONE) {
+        logger_propagate("Running the query: %s", sqlite3_errmsg(database_sqlite3));
+        goto query;
+    }
+    sqlite3_clear_bindings(database_sqlite3_stmt_subscription_add);
     sqlite3_reset(database_sqlite3_stmt_subscription_add);
     return 0;
+query:
+bind:
+    sqlite3_clear_bindings(database_sqlite3_stmt_subscription_add);
+    logger_propagate("Inserting the relationship");
+    return -1;
 }
 
 static sqlite3_stmt *database_prepare_statement(char const *sql) {

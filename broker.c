@@ -1,10 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
+#include <errno.h>
 #include <unistd.h>
 #include <signal.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -13,10 +12,11 @@
 #include <event2/event.h>
 
 #include "config.h"
-#include "broker.h"
 #include "cmdopt.h"
+#include "logger.h"
 #include "registration.h"
 #include "request.h"
+#include "broker.h"
 
 #define BROKER_HOST "localhost"
 #define BROKER_REGISTRATION_PORT "7734"
@@ -53,14 +53,14 @@ void broker_init(struct event_base *base) {
             break;
         case EAI_SYSTEM:
         case EAI_MEMORY:
-            perror("Unable to resolve local address and service");
+            fprintf(stderr, "Unable to resolve %s to a local address: %s\n", broker_host, strerror(errno));
             goto addrinfo;
         default:
-            fprintf(stderr, "Failed to resolve local address\n");
+            fprintf(stderr, "Failed to resolve %s to a local address\n", broker_host);
             goto addrinfo;
     }
     if (!addrinfo_list) {
-        fprintf(stderr, "Address and service resolution returned no data\n");
+        fprintf(stderr, "resolution of %s didn't return any local addresses\n", broker_host);
         goto addrinfo;
     }
     unsigned long registration_port = strtoul(broker_registration_port, NULL, 10);
@@ -72,7 +72,7 @@ void broker_init(struct event_base *base) {
     }
     broker_event_sigterm = evsignal_new(base, SIGTERM, broker_event_signal_handler, NULL);
     if (!broker_event_sigterm) {
-        perror("Unable to create an event for a signal handler");
+        perror("Unable to create a signal event");
         goto event;
     }
     if (event_add(broker_event_sigterm, NULL) < 0) {
@@ -96,10 +96,10 @@ static void broker_event_registration_handler(evutil_socket_t sd, short events, 
     ssize_t count = recv(sd, buf, sizeof buf, 0);
     if (count < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-        syslog(LOG_ERR, "Aborting execution due to an error listening to a local socket: %m");
+        logger_fail("Reading from a registration socket: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
-    syslog(LOG_DEBUG, "Received a packet with a %zd byte registration request", count);
+    logger_debug("Received a %zu byte packet on a registration socket", count);
     registration_process(buf, count);
 }
 
@@ -110,10 +110,10 @@ static void broker_event_request_handler(evutil_socket_t sd, short events, void 
     ssize_t count = recv(sd, buf, sizeof buf, 0);
     if (count < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-        syslog(LOG_ERR, "Aborting execution due to an error listening to a local socket: %m");
+        logger_fail("Reading from a request socket: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
-    syslog(LOG_DEBUG, "Received a packet with a %zd byte notification request", count);
+    logger_debug("Received a %zu byte packet on a request socket", count);
     request_process(buf, count);
 }
 
@@ -153,16 +153,16 @@ static int broker_socket(struct addrinfo *addrinfo, unsigned long port, event_ca
     }
     struct event *event = event_new(broker_event_base, sd, EV_READ | EV_PERSIST, handler, NULL);
     if (!event) {
-        perror("Unable to create an event");
+        perror("Unable to create a socket event");
         goto event;
     }
     if (event_add(event, NULL) < 0) {
-        perror("Unable to register an event");
+        perror("Unable to register a socket event");
         goto reg;
     }
     struct event **event_list = realloc(broker_event_list, (broker_event_count + 1) * sizeof *event_list);
     if (!event_list) {
-        perror("Unable to reallocate memory for an event array");
+        perror("Unable to reallocate memory for the broker event array");
         goto list;
     }
     event_list[broker_event_count ++] = event;
@@ -185,4 +185,5 @@ static void broker_cleanup(void) {
         close(sd);
         event_free(event);
     }
+    if (broker_event_list) free(broker_event_list);
 }

@@ -1,16 +1,16 @@
 #include <stdlib.h>
 #include <string.h>
-#include <syslog.h>
 
+#include <event2/event.h>
 #include <yajl/yajl_parse.h>
 
+#include "logger.h"
 #include "database.h"
 #include "registration.h"
 
 struct registration {
     enum {
         REGISTRATION_STATE_NONE,
-        REGISTRATION_STATE_MEMORY,
         REGISTRATION_STATE_ROOT,
         REGISTRATION_STATE_GROUP,
         REGISTRATION_STATE_DEVICE
@@ -35,22 +35,25 @@ void registration_process(char const *json, size_t len) {
     struct registration registration = {.state = REGISTRATION_STATE_NONE};
     yajl_handle yajl = yajl_alloc(&registration_yajl_callbacks, NULL, &registration);
     if (!yajl) {
-        syslog(LOG_WARNING, "Dropping registration request due to insufficient memory to parse it");
+        logger_complain("Processing a registration request: Creating a JSON parser instance: %s", strerror(errno));
         return;
     }
-    yajl_status status = yajl_parse(yajl, (unsigned char *) json, len);
+    yajl_status status = yajl_parse(yajl, (unsigned char const *) json, len);
     if (status == yajl_status_ok) status = yajl_complete_parse(yajl);
     if (status != yajl_status_ok) {
-        if (registration.state != REGISTRATION_STATE_MEMORY) syslog(LOG_NOTICE, "Dropping registration request due to a parse error");
-        else syslog(LOG_WARNING, "Dropping registration request due to insufficient memory to parse it");
+        if (status == yajl_status_error) logger_complain("Processing a registration request: Parse error");
         goto parse;
     }
     if (!registration.group || !registration.device) {
-        syslog(LOG_NOTICE, "Dropping registration request due to missing data");
+        logger_complain("Processing a registration request: Erroneus data");
         goto data;
     }
-    syslog(LOG_INFO, "Received registration request to assign the device token %s to group %s", registration.device, registration.group);
-    database_subscribe(registration.device, registration.device_len, registration.group, registration.group_len);
+    if (database_subscribe(registration.device, registration.device_len, registration.group, registration.group_len) < 0) {
+        logger_complain("Processing a registration request");
+        goto database;
+    }
+    logger_report("Processed a registration request to assign the device token %.*s to group %.*s", (int) registration.device_len, registration.device, (int) registration.group_len, registration.group);
+database:
 data:
     free(registration.group);
     free(registration.device);
@@ -58,44 +61,54 @@ parse:
     yajl_free(yajl);
 }
 
-
 static int registration_yajl_string(void *arg, unsigned char const *value, size_t len) {
-    if (!len) return 0;
+    if (!len) goto empty;
     struct registration *registration = arg;
     switch (registration->state) {
         case REGISTRATION_STATE_GROUP:
             free(registration->group);
             registration->group = strndup((char const *) value, len);
             registration->group_len = len;
-            if (!registration->group) registration->state = REGISTRATION_STATE_MEMORY;
+            if (!registration->group) goto copy;
             break;
         case REGISTRATION_STATE_DEVICE:
             free(registration->device);
             registration->device = strndup((char const *) value, len);
             registration->device_len = len;
-            if (!registration->device) registration->state = REGISTRATION_STATE_MEMORY;
+            if (!registration->device) goto copy;
             break;
         default:
-            return 0;
+            break;
     }
-    if (registration->state == REGISTRATION_STATE_MEMORY) return 0;
     registration->state = REGISTRATION_STATE_ROOT;
     return 1;
+copy:
+    logger_complain("Processing a registration request: Copying a value: %s", strerror(errno));
+    return 0;
+empty:
+    logger_complain("Processing a registration request: Empty string");
+    return 0;
 }
 
 static int registration_yajl_start_map(void *arg) {
     struct registration *registration = arg;
-    if (registration->state != REGISTRATION_STATE_NONE) return 0;
+    if (registration->state != REGISTRATION_STATE_NONE) goto parse;
     registration->state = REGISTRATION_STATE_ROOT;
     return 1;
+parse:
+    logger_complain("Processing a registration request: Parse error");
+    return 0;
 }
 
 static int registration_yajl_map_key(void *arg, unsigned char const *key, size_t len) {
     struct registration *registration = arg;
     if (len == sizeof "group" - 1 && strncmp((char const *) key, "group", len) == 0) registration->state = REGISTRATION_STATE_GROUP;
     else if (len == sizeof "device" - 1 && strncmp((char const *) key, "device", len) == 0) registration->state = REGISTRATION_STATE_DEVICE;
-    else return 0;
+    else goto key;
     return 1;
+key:
+    logger_complain("Processing a a registration request: Unknown key: %.*s", (int) len, (char const *) key);
+    return 0;
 }
 
 static int registration_yajl_end_map(void *arg) {
