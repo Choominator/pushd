@@ -268,8 +268,10 @@ enum channel_post_result channel_post(channel_t *channel, notification_t *notifi
         CHANNEL_NGHTTP2_HEADER("apns-priority", priority, priority_len, NGHTTP2_NV_FLAG_NONE),
         CHANNEL_NGHTTP2_HEADER("apns-collapse-id", key, key_len, NGHTTP2_NV_FLAG_NO_INDEX)
     };
+    size_t headers_len = sizeof headers / sizeof *headers;
+    if (!key_len) -- headers_len;
     nghttp2_data_provider provider = {.source = {.ptr = notification}, .read_callback = channel_nghttp2_do_fetch_data};
-    int32_t stream_id = nghttp2_submit_request(channel->nghttp2, NULL, headers, sizeof headers / sizeof *headers, &provider, notification);
+    int32_t stream_id = nghttp2_submit_request(channel->nghttp2, NULL, headers, headers_len, &provider, notification);
     if (stream_id < 0) {
         if (stream_id == NGHTTP2_ERR_STREAM_ID_NOT_AVAILABLE) {
             logger_propagate("Reached the maximum number of allowed streams");

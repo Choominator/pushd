@@ -65,7 +65,7 @@ int notification_add_group(char const *group, size_t len) {
 }
 
 notification_queue_t *notification_gen_queue(void) {
-    if (!notification_base.key_len || !notification_base.payload_len) {
+    if (!notification_base.payload_len) {
         logger_propagate("Erroneus data");
         goto request;
     }

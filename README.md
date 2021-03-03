@@ -129,7 +129,7 @@ The dictionary sent to the notification request port accepts the following keys:
 * `groups` - A mandatory key whose value must be an array of strings containing the names of the device groups to notify.  This causes `pushd` to generate only one notification per device even if a device is registered to more than one of the specified groups.
 * `type` - An optional key whose value must be the string `"background"`, `"normal"`, or `"urgent"`, for background notifications, normal alerts, or urgent alerts respectively.  The default value if this key is not specified is `"background"`.
 * `expiration` - An optional key whose value must be an integer containing the Unix time, that is, the number of seconds elapsed since 1970-01-01 00:00:00 Coordinated Universal Time until which APNs should attempt to deliver the notifications, or `0` to only attempt to deliver them once.  The default value if this key is not specified is `0`.
-* `key` - A mandatory key whose value must be a string of at most 64 bytes identifying the contents of the notification.  All notifications with the same value for this key will coalesce into a single alert.
+* `key` - An optional key whose value must be a string of at most 64 bytes identifying the notification.  All notifications with the same value for this key will coalesce into a single alert.
 * `payload` - A mandatory key whose value must be a dictionary structured as specified by Apple at the [Generating a Remote Notification](https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server/generating_a_remote_notification) documentation page.
 
 ## Example
@@ -215,7 +215,7 @@ To send a notification you must first switch to the notification request port, s
 
 Followed by entering the following JSON code:
 
-    {"groups": ["Choom"], "type": "urgent", "key": "hello", "payload": {"aps": {"alert": "Hello world!"}}}
+    {"groups": ["Choom"], "type": "urgent", "payload": {"aps": {"alert": "Hello world!"}}}
 
 Which should cause the following messages to be displayed on the `pushd` terminal:
 
